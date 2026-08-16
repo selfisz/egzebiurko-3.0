@@ -104,26 +104,34 @@ const ZobowiazaniModule = (() => {
   function selectBestSheet(data) {
     if (!data || !Array.isArray(data.sheets) || !data.sheets.length) return false;
 
-    let bestIndex = -1;
-    let maxRows = -1;
+    // 1) Dokładna nazwa bazy Zobowiązani / Rejestr — nawet pusta (tryb Z bazą)
+    let bestIndex = data.sheets.findIndex(s => {
+      const n = String(s.name || '').trim().toLowerCase();
+      return n === 'zobowiązani' || n === 'rejestr';
+    });
 
-    data.sheets.forEach((s, idx) => {
-      const name = s.name || '';
-      const isMatch = (name.toLowerCase() === 'zobowiązani' ||
-                       name.toLowerCase() === 'rejestr' ||
-                       name.toLowerCase().includes('zobowiązani') ||
-                       (s.columns && s.columns.some(c => /pesel/i.test(c) || /nip/i.test(c))));
+    // 2) Nazwa zawiera „zobowiązani”
+    if (bestIndex < 0) {
+      bestIndex = data.sheets.findIndex(s => String(s.name || '').toLowerCase().includes('zobowiązani'));
+    }
 
-      if (isMatch) {
+    // 3) Arkusz z PESEL/NIP — najwięcej wierszy
+    if (bestIndex < 0) {
+      let maxRows = -1;
+      data.sheets.forEach((s, idx) => {
+        const hasId = s.columns && s.columns.some(c => /pesel/i.test(String(c)) || /nip/i.test(String(c)));
+        if (!hasId) return;
         const rowCount = (s.rows || []).length;
         if (rowCount > maxRows) {
           maxRows = rowCount;
           bestIndex = idx;
         }
-      }
-    });
+      });
+    }
 
+    // 4) Największy arkusz
     if (bestIndex < 0) {
+      let maxRows = -1;
       data.sheets.forEach((s, idx) => {
         const rowCount = (s.rows || []).length;
         if (rowCount > maxRows) {
@@ -155,10 +163,80 @@ const ZobowiazaniModule = (() => {
   }
 
   /* ─── SYNCHRONIZACJA Z ARKUSZEM / PLIKIEM ──────────────── */
+  async function fetchDbFromArkusz(timeoutMs = 2500) {
+    if (typeof ArkuszModule !== 'undefined') {
+      ArkuszModule.ensureIframe();
+    }
+
+    const frame = document.getElementById('arkusz-frame');
+    if (!frame) {
+      throw new Error('Iframe arkusz-frame nie istnieje lub brak dostępu.');
+    }
+
+    // Poczekaj aż iframe będzie gotowy
+    if (!frame.contentWindow) {
+      await new Promise((resolve, reject) => {
+        const t = setTimeout(() => reject(new Error('Timeout ładowania Arkusza')), Math.min(timeoutMs, 5000));
+        frame.addEventListener('load', () => { clearTimeout(t); resolve(); }, { once: true });
+      });
+    } else {
+      await new Promise(r => setTimeout(r, 250));
+    }
+
+    // Upewnij się, że w Arkuszu istnieje karta Zobowiązani (tryb Z bazą)
+    try {
+      frame.contentWindow.postMessage({ type: 'ENSURE_REGISTRY', switchTo: false }, '*');
+      await new Promise(r => setTimeout(r, 100));
+    } catch {}
+
+    const raw = await new Promise((resolve, reject) => {
+      let intervalId;
+      const handler = (e) => {
+        if (e.data && e.data.type === 'DB_DATA') {
+          window.removeEventListener('message', handler);
+          clearInterval(intervalId);
+          resolve(e.data.payload);
+        }
+      };
+      window.addEventListener('message', handler);
+
+      intervalId = setInterval(() => {
+        if (frame && frame.contentWindow) {
+          frame.contentWindow.postMessage({ type: 'GET_DB' }, '*');
+        }
+      }, 120);
+
+      setTimeout(() => {
+        window.removeEventListener('message', handler);
+        clearInterval(intervalId);
+        reject(new Error('Brak odpowiedzi od Arkusza (timeout).'));
+      }, timeoutMs);
+    });
+
+    if (!raw) throw new Error('Pusta odpowiedź z Arkusza');
+    const parsed = normalizeToDbData(typeof raw === 'string' ? JSON.parse(raw) : raw);
+    if (!selectBestSheet(parsed)) {
+      throw new Error('Arkusz nie zawiera arkusza z danymi');
+    }
+    return true;
+  }
+
   async function loadDataAsync() {
     dbErrorMsg = '';
 
-    // 1) Lokalna kopia (po wcześniejszym wczytaniu JSON / Arkusza)
+    // 1) Żywe dane z Arkusza (priorytet — synchronizacja z trybem „Z bazą”)
+    try {
+      await fetchDbFromArkusz();
+      dataSourceLabel = 'Arkusz';
+      try { localStorage.removeItem(FILE_SOURCE_KEY); } catch {}
+      persistLocal();
+      return true;
+    } catch (e) {
+      console.warn('[ZobowiazaniModule] Arkusz niedostępny:', e);
+      dbErrorMsg = e.toString();
+    }
+
+    // 2) Fallback: lokalna kopia / wcześniej wczytany JSON
     try {
       const raw = localStorage.getItem(AUTOSAVE_KEY);
       if (raw) {
@@ -172,54 +250,44 @@ const ZobowiazaniModule = (() => {
       console.warn('[ZobowiazaniModule] localStorage read failed:', e);
     }
 
-    // 2) Arkusz (iframe)
-    try {
-      if (typeof ArkuszModule !== 'undefined') {
-        ArkuszModule.ensureIframe();
-      }
+    return false;
+  }
 
-      const frame = document.getElementById('arkusz-frame');
-      if (!frame || !frame.contentWindow) {
-        throw new Error('Iframe arkusz-frame nie istnieje lub brak dostępu.');
-      }
-
-      const raw = await new Promise((resolve, reject) => {
-        let intervalId;
-        const handler = (e) => {
-          if (e.data && e.data.type === 'DB_DATA') {
-            window.removeEventListener('message', handler);
-            clearInterval(intervalId);
-            resolve(e.data.payload);
-          }
-        };
-        window.addEventListener('message', handler);
-
-        intervalId = setInterval(() => {
-          if (frame && frame.contentWindow) {
-            frame.contentWindow.postMessage({ type: 'GET_DB' }, '*');
-          }
-        }, 100);
-
-        setTimeout(() => {
-          window.removeEventListener('message', handler);
-          clearInterval(intervalId);
-          reject(new Error('Brak odpowiedzi od Arkusza (timeout).'));
-        }, 2000);
-      });
-
-      if (!raw) throw new Error('Pusta odpowiedź z Arkusza');
-      const parsed = normalizeToDbData(typeof raw === 'string' ? JSON.parse(raw) : raw);
-      if (selectBestSheet(parsed)) {
+  let _syncTimer = null;
+  function scheduleSyncFromArkusz() {
+    if (!activated) return;
+    clearTimeout(_syncTimer);
+    _syncTimer = setTimeout(async () => {
+      try {
+        const prevIdx = selectedRowIndex;
+        await fetchDbFromArkusz(2000);
         dataSourceLabel = 'Arkusz';
-        persistLocal();
-        return true;
+        if (dbSheet && prevIdx >= 0 && prevIdx < dbSheet.rows.length) {
+          selectedRowIndex = prevIdx;
+        }
+        renderViews();
+        updatePillsBar();
+      } catch (e) {
+        console.warn('[ZobowiazaniModule] sync refresh failed:', e);
       }
-      throw new Error('Arkusz nie zawiera arkusza z danymi');
-    } catch (e) {
-      console.error('[ZobowiazaniModule] Błąd wczytywania:', e);
-      dbErrorMsg = e.toString();
-      return false;
-    }
+    }, 400);
+  }
+
+  function bindArkuszSyncListeners() {
+    if (bindArkuszSyncListeners._done) return;
+    bindArkuszSyncListeners._done = true;
+
+    window.addEventListener('message', (e) => {
+      if (!e.data) return;
+      if (e.data.type === 'EGZE_DB_UPDATED' || e.data.type === 'EGZE_WORK_MODE') {
+        scheduleSyncFromArkusz();
+      }
+    });
+
+    // Inna karta / okno z tym samym origin
+    window.addEventListener('storage', (e) => {
+      if (e.key === AUTOSAVE_KEY) scheduleSyncFromArkusz();
+    });
   }
 
   function loadFromFile(file) {
@@ -767,11 +835,15 @@ const ZobowiazaniModule = (() => {
             <div class="zob-sheet" style="max-width:560px;margin:24px auto;text-align:center;gap:14px">
               <div class="zob-sheet-title" style="justify-content:center"><span>Wczytaj bazę z pliku</span></div>
               <p class="zob-mod-sub" style="margin:0;line-height:1.5">
-                Wskaż eksport Arkusza (<code>.json</code> / <code>.js</code>) — bez iframe i bez <code>arkusz3.html</code>.
+                Włącz w Arkuszu tryb <strong>„Z bazą”</strong> (pojawi się karta ★ Zobowiązani), wklej bazę,<br>
+                albo wskaż eksport <code>.json</code> / <code>.js</code>.
               </p>
-              <button class="zob-action-btn primary" style="align-self:center;height:40px;padding:0 22px" onclick="ZobowiazaniModule.loadJsonFile()">
-                Wczytaj bazę (.json)
-              </button>
+              <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
+                <button class="zob-action-btn" style="height:40px;padding:0 18px" onclick="Router.navigate('arkusz')">Otwórz Arkusz</button>
+                <button class="zob-action-btn primary" style="height:40px;padding:0 22px" onclick="ZobowiazaniModule.loadJsonFile()">
+                  Wczytaj bazę (.json)
+                </button>
+              </div>
               ${dbErrorMsg ? `<div style="color:var(--zob-spine);font-size:.82rem;text-align:left;margin-top:8px"><strong>Arkusz:</strong> ${escapeHtml(dbErrorMsg)}</div>` : ''}
             </div>
           </div>
@@ -789,6 +861,7 @@ const ZobowiazaniModule = (() => {
               <p class="zob-mod-sub">Kartoteka: <strong>${escapeHtml(dbSheet.name || 'Zobowiązani')}</strong> · źródło: <strong>${escapeHtml(dataSourceLabel || '—')}</strong> — ${dbSheet.rows.length} teczek</p>
             </div>
             <div class="zob-actions">
+              <button class="zob-action-btn" onclick="ZobowiazaniModule.refreshFromArkusz()" title="Pobierz aktualną bazę z Arkusza">Odśwież z Arkusza</button>
               <button class="zob-action-btn primary" onclick="ZobowiazaniModule.loadJsonFile()" title="Wczytaj bazę z pliku JSON / JS">Wczytaj JSON</button>
               <button class="zob-action-btn olive" onclick="ZobowiazaniModule.copyCleanExcel()" title="Kopiuje widoczne teczki jako czysty tekst do Excela">Kopiuj do Excela</button>
               <button class="zob-action-btn" onclick="ZobowiazaniModule.syncAllCepik()" title="Auto-sync CEPIK z WRO">Auto-Sync CEPIK</button>
@@ -1259,9 +1332,27 @@ const ZobowiazaniModule = (() => {
     });
   }
 
+  async function refreshFromArkusz() {
+    try {
+      await fetchDbFromArkusz(3000);
+      dataSourceLabel = 'Arkusz';
+      try { localStorage.removeItem(FILE_SOURCE_KEY); } catch {}
+      persistLocal();
+      if (typeof showToast === 'function') {
+        showToast(`Zsynchronizowano z Arkuszem: ${dbSheet.rows.length} teczek`, 'success', 2800);
+      }
+      await render();
+    } catch (err) {
+      if (typeof showToast === 'function') {
+        showToast(`Nie udało się odświeżyć: ${err.message || err}`, 'error', 4000);
+      }
+    }
+  }
+
   /* ─── API MODUŁU ──────────────────────────────────────── */
   async function activate(params = {}) {
     activated = true;
+    bindArkuszSyncListeners();
     await render();
   }
 
@@ -1281,7 +1372,8 @@ const ZobowiazaniModule = (() => {
     syncAllCepik: syncAllCepikFromWro,
     copyCleanExcel: copyCleanExcelText,
     copy: copyToClipboard,
-    loadJsonFile: triggerFilePicker
+    loadJsonFile: triggerFilePicker,
+    refreshFromArkusz
   };
 
 })();

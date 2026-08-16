@@ -1104,6 +1104,11 @@ function runAutosave(){
     const data=buildAutosavePayload();
     localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(data));
     App._autosavedAt=data.savedAt;
+    try{
+      if(window.parent && window.parent!==window){
+        window.parent.postMessage({ type:'EGZE_DB_UPDATED', savedAt:data.savedAt }, '*');
+      }
+    }catch(_){}
   }catch(err){
     if(!App._autosaveWarned){ App._autosaveWarned=true; toast('Autosave: brak miejsca w localStorage — użyj Zapisz JSON'); }
   }
@@ -3014,14 +3019,23 @@ function setWorkMode(mode, silent){
       const other=App.sheets.find(s=>!isRegistrySheet(s));
       if(other) App.activeId=other.id;
     }
+  } else {
+    // Z bazą → zawsze utwórz/pokaż kartę ★ Zobowiązani (inaczej zakładka się nie pojawia)
+    ensureRegistrySheet(false);
+    scheduleAutosave();
   }
   
   renderSheetBar();
   if(!silent){
     toast(App.workMode==='linked'
-      ?'Tryb Z BAZĄ: listy automatycznie powiązane z Zobowiązanymi. Oznaczenia → baza.'
+      ?'Tryb Z BAZĄ: karta ★ Zobowiązani jest widoczna na dole. Listy powiązane z bazą.'
       :'Tryb DORAŹNY: wklejasz cokolwiek, bez śladu w bazie Zobowiązanych.');
   }
+  try{
+    if(window.parent && window.parent!==window){
+      window.parent.postMessage({ type:'EGZE_WORK_MODE', mode:App.workMode }, '*');
+    }
+  }catch(_){}
 }
 function loadWorkMode(){
   try{
@@ -5603,12 +5617,19 @@ renderSwatches(); fillRegSysMenu(); setRibbonTab(App.ribbonTab||'dane'); render(
 
 window.addEventListener('message', (e) => {
   if (e.data && e.data.type === 'GET_DB') {
+    try { runAutosave(); } catch(_){}
     const raw = localStorage.getItem(AUTOSAVE_KEY);
     window.parent.postMessage({ type: 'DB_DATA', payload: raw }, '*');
   } else if (e.data && e.data.type === 'SET_DB') {
     localStorage.setItem(AUTOSAVE_KEY, e.data.payload);
     window.onbeforeunload = null; 
     location.reload();
+  } else if (e.data && e.data.type === 'ENSURE_REGISTRY') {
+    ensureRegistrySheet(!!e.data.switchTo);
+    scheduleAutosave();
+    renderSheetBar();
+    render();
+    window.parent.postMessage({ type:'EGZE_DB_UPDATED', savedAt: App._autosavedAt||null }, '*');
   }
 });
 })();
