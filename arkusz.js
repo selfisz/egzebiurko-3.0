@@ -14,20 +14,9 @@ const ArkuszModule = (() => {
   let _selectedId = null;
 
   /* ─── Ścieżka do oryginału ─────────────────────── */
-  /* index.html w egzebiurko-3.0/  →  ../html/arkusz3.html
-     index z rozpakowanego ZIP w .../31/... → ../../html/arkusz3.html */
+  /* Arkusz jest w repo: html/arkusz3.html (działa z file:// i z scripts/serve.py) */
   function resolveArkuszSrc() {
-    const path = String(window.location.pathname || '').replace(/\\/g, '/');
-    const candidates = [
-      '../html/arkusz3.html',
-      '../../html/arkusz3.html',
-      'html/arkusz3.html',
-      './html/arkusz3.html',
-    ];
-    if (/\/31\//.test(path) || /egzebiurko-3\.0-main/.test(path)) {
-      return '../../html/arkusz3.html';
-    }
-    return candidates[0];
+    return 'html/arkusz3.html';
   }
   let ARKUSZ_SRC = resolveArkuszSrc();
 

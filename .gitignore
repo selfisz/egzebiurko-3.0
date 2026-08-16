@@ -5,3 +5,7 @@ __pycache__/
 *.pyc
 .vscode/
 .idea/
+
+# lokalne rozpakowane ZIP-y
+31/
+

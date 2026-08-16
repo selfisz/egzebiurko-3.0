@@ -10,13 +10,14 @@ Aplikacja lokalna do pracy ze sprawami: **Arkusz**, **Baza zobowiązanych**, **O
 
 ```text
 egzebiurko-3.0/
-├── index.html       ← start aplikacji
-├── app.js           ← router, SharedStore
+├── index.html
+├── app.js
 ├── arkusz.js
 ├── ognivo.js
 ├── wro.js
 ├── zobowiazani.js
-├── scripts/serve.py ← lokalny serwer
+├── html/arkusz3.html  ← Arkusz
+├── scripts/serve.py
 └── README.md
 ```
 
@@ -53,7 +54,7 @@ Otwórz `index.html` dwuklikiem. Potem:
 | Analityka WRO | baza `.js` / `.json` z makra Excel |
 | OGNIVO | odpowiedzi banków `.xml` |
 | Szafka teczek | baza `.json` / `.js` (przycisk **Wczytaj JSON**) albo dane z Arkusza |
-| Arkusz | `../html/arkusz3.html` (folder `egzebiurko/html/`) |
+| Arkusz | `html/arkusz3.html` (w paczce ZIP) |
 
 ## Uwagi
 
