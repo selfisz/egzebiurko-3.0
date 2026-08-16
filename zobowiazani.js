@@ -1407,6 +1407,7 @@ const ZobowiazaniModule = (() => {
           <td>
             <div class="zob-reg-name" title="${escapeHtml(info.name)}">${escapeHtml(info.name)}</div>
             ${idLine ? `<div class="zob-reg-ids">${fullCols ? escapeHtml(idLine) : escapeHtml(info.pesel ? `PESEL: ${info.pesel}` : (info.nip ? `NIP: ${info.nip}` : idLine))}</div>` : ''}
+            ${!fullCols ? `<div class="zob-systems-dots">${dots}<span class="zob-systems-count">${sysCount}/5</span></div>` : ''}
             ${!fullCols ? deferChip : ''}
           </td>
           ${fullCols ? `<td class="zob-reg-ids">${escapeHtml(idLine || '—')}</td>` : ''}
@@ -1424,6 +1425,9 @@ const ZobowiazaniModule = (() => {
         </tr>
       `;
     });
+
+    const drawer = document.querySelector('.zob-drawer');
+    if (drawer) drawer.classList.toggle('compact', !fullCols);
 
     list.innerHTML = `
       <table class="zob-reg-table ${fullCols ? 'zob-reg-full' : 'zob-reg-compact'}">
