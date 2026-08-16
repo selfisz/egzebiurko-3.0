@@ -801,7 +801,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
 .zob-split-container{flex:1; min-height:0; display:flex; gap:14px; overflow:hidden}
 .zob-split-container.mode-list .zob-drawer{width:100%; max-width:none; flex:1}
 .zob-split-container.mode-list .zob-folder-open{display:none}
-.zob-split-container.mode-split .zob-drawer{width:min(360px, 38%); flex-shrink:0}
+.zob-split-container.mode-split .zob-drawer{width:min(300px, 34%); flex-shrink:0}
 .zob-split-container.mode-focus{
   justify-content:center;
   background:
@@ -960,22 +960,56 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
   box-shadow: 0 8px 24px rgba(26,35,50,.08);
 }
 .zob-drawer.compact{
-  width:min(360px, 48%);
+  width:min(300px, 34%);
+  min-width:240px;
 }
-.zob-drawer.compact .zob-reg-name{font-size:.86rem; max-width:none}
-.zob-drawer.compact .zob-reg-ids{margin-top:2px}
-.zob-drawer.compact .zob-systems-dots{
+.zob-drawer.compact .zob-folder-scroll{
+  overflow-x:hidden;
+  overflow-y:auto;
+}
+.zob-person-list-head{
+  display:flex; justify-content:space-between; align-items:center; gap:8px;
+  padding:8px 12px; position:sticky; top:0; z-index:2;
+  background:var(--zob-ink); color:var(--zob-cream);
+  border-bottom:2px solid var(--zob-spine);
+}
+.zob-person-sort{
+  font:inherit; font-size:.66rem; font-weight:700; text-transform:uppercase; letter-spacing:.04em;
+  border:0; background:transparent; color:inherit; cursor:pointer; padding:0;
+}
+.zob-person-sort.is-sorted{color:#f0d6c8}
+.zob-person-list{display:flex; flex-direction:column}
+.zob-person-row{
+  display:flex; align-items:center; justify-content:space-between; gap:10px;
+  width:100%; box-sizing:border-box; text-align:left;
+  padding:9px 12px; border:0; border-bottom:1px solid var(--zob-edge);
+  background:transparent; color:var(--zob-ink); cursor:pointer; font:inherit;
+}
+.zob-person-row:nth-child(even){background:color-mix(in srgb, var(--zob-paper) 55%, transparent)}
+.zob-person-row:hover{background:color-mix(in srgb, var(--zob-paper2) 80%, #fff)}
+.zob-person-row.is-selected{
+  background:color-mix(in srgb, var(--zob-spine) 12%, var(--zob-cream)) !important;
+  box-shadow: inset 4px 0 0 var(--zob-spine);
+}
+.zob-person-main{min-width:0; flex:1}
+.zob-person-row .zob-reg-name{
+  max-width:none; width:100%;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  font-size:.88rem;
+}
+.zob-person-row .zob-systems-dots{
   display:inline-flex; gap:3px; align-items:center; margin-top:4px;
 }
-.zob-drawer.compact .zob-systems-dots .zob-dot{
-  width:7px; height:7px; border-radius:50%; display:inline-block;
-  background: transparent; border:1.5px solid color-mix(in srgb, var(--zob-ink-soft) 50%, transparent);
+.zob-person-row .zob-systems-dots .zob-dot{
+  width:7px; height:7px; border-radius:50%; display:inline-block; flex-shrink:0;
+  background:transparent; border:1.5px solid color-mix(in srgb, var(--zob-ink-soft) 50%, transparent);
 }
-.zob-drawer.compact .zob-systems-dots .zob-dot.on{background:var(--zob-olive); border-color:var(--zob-olive)}
-.zob-drawer.compact .zob-systems-dots .zob-dot.skip{background:var(--zob-edge); border-color:var(--zob-edge)}
-.zob-drawer.compact .zob-systems-count{
-  font-size:.68rem; font-weight:700; color:var(--zob-ink-soft); margin-left:6px;
+.zob-person-row .zob-systems-dots .zob-dot.on{background:var(--zob-olive); border-color:var(--zob-olive)}
+.zob-person-row .zob-systems-dots .zob-dot.skip{background:var(--zob-edge); border-color:var(--zob-edge)}
+.zob-person-row .zob-systems-count{
+  font-size:.65rem; font-weight:700; color:var(--zob-ink-soft); margin-left:5px;
 }
+.zob-person-row .zob-status-chip{flex-shrink:0}
 .zob-drawer-head{
   padding:10px 14px; color:var(--zob-ink-soft); font-size:.68rem; font-weight:700;
   letter-spacing:.1em; text-transform:uppercase; border-bottom:1px solid var(--zob-edge);
@@ -1013,6 +1047,8 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
 .zob-reg-table tbody tr:hover td{background:color-mix(in srgb, var(--zob-paper2) 80%, #fff)}
 .zob-reg-table tbody tr.is-selected td{
   background:color-mix(in srgb, var(--zob-spine) 12%, var(--zob-cream)) !important;
+}
+.zob-reg-table tbody tr.is-selected td:first-child{
   box-shadow: inset 3px 0 0 var(--zob-spine);
 }
 .zob-reg-table td{
@@ -1028,7 +1064,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
 .zob-reg-table.zob-reg-compact td{padding:9px 12px}
 .zob-reg-table.zob-reg-compact .zob-reg-name{max-width:none; font-size:.92rem}
 .zob-reg-table.zob-reg-compact .zob-reg-ids{margin-top:3px}
-.zob-reg-table.zob-reg-compact tbody tr.is-selected td{
+.zob-reg-table.zob-reg-compact tbody tr.is-selected td:first-child{
   box-shadow: inset 4px 0 0 var(--zob-spine);
 }
 .zob-reg-sys{display:inline-flex; gap:3px; align-items:center}
@@ -1062,6 +1098,18 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
 .zob-defer-banner.due{background:rgba(154,107,47,.14); color:#7a5524}
 .zob-defer-actions{display:flex; flex-wrap:wrap; gap:6px; align-items:center}
 .zob-defer-note{font-size:.72rem; color:var(--zob-ink-soft); margin:0; line-height:1.35}
+.zob-defer-pop{
+  position:fixed; z-index:90; min-width:220px; max-width:min(300px,92vw);
+  background:var(--zob-cream); color:var(--zob-ink);
+  border:1px solid var(--zob-edge); border-radius:12px;
+  box-shadow:0 14px 36px rgba(26,35,50,.2); padding:10px;
+}
+.zob-defer-pop .zob-defer-pop-h{
+  font-size:.7rem; font-weight:700; text-transform:uppercase; letter-spacing:.04em;
+  color:var(--zob-ink-soft); margin:0 0 8px; padding:0 2px;
+}
+.zob-defer-pop .zob-defer-actions{flex-direction:column; align-items:stretch}
+.zob-defer-pop .zob-action-btn{justify-content:flex-start; text-align:left; height:34px}
 
 /* Otwarta teczka */
 .zob-folder-open{
@@ -1297,11 +1345,6 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
       <span class="nav-icon">▦</span>
       <span class="nav-label">Szafka teczek</span>
     </button>
-    <button class="nav-btn" data-module="ognivo" onclick="handleNavClick(event, 'ognivo')" oncontextmenu="showNavMenu(event, 'ognivo')">
-      <span class="nav-icon">🏦</span>
-      <span class="nav-label">OGNIVO</span>
-      <span class="nav-badge" id="nav-badge-ognivo" style="display:none"></span>
-    </button>
     <button class="nav-btn" data-module="wro" onclick="handleNavClick(event, 'wro')" oncontextmenu="showNavMenu(event, 'wro')">
       <span class="nav-icon">📊</span>
       <span class="nav-label">Analityka WRO</span>
@@ -1309,6 +1352,11 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
     </button>
 
     <div class="nav-section">Narzędzia</div>
+    <button class="nav-btn" data-module="ognivo" onclick="handleNavClick(event, 'ognivo')" oncontextmenu="showNavMenu(event, 'ognivo')">
+      <span class="nav-icon">🏦</span>
+      <span class="nav-label">OGNIVO</span>
+      <span class="nav-badge" id="nav-badge-ognivo" style="display:none"></span>
+    </button>
     <button class="nav-btn" data-module="zakladka1" onclick="handleNavClick(event, 'zakladka1')" oncontextmenu="showNavMenu(event, 'zakladka1')">
       <span class="nav-icon">📊</span>
       <span class="nav-label">Wklepywator Excel</span>

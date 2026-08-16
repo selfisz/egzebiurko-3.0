@@ -552,6 +552,7 @@ const ZobowiazaniModule = (() => {
     d.setDate(d.getDate() + days);
     const label = formatDatePl(d);
     setDeferDate(rowIndex, label);
+    closeDeferMenu();
     if (typeof showToast === 'function') {
       showToast(`Odłożono — wróć ${label}`, 'info', 2200);
     }
@@ -571,12 +572,59 @@ const ZobowiazaniModule = (() => {
       return;
     }
     setDeferDate(rowIndex, trimmed);
+    closeDeferMenu();
     if (typeof showToast === 'function') showToast(`Przypomnienie: wróć ${trimmed}`, 'info', 2200);
   }
 
   function clearDefer(rowIndex) {
     setDeferDate(rowIndex, '');
+    closeDeferMenu();
     if (typeof showToast === 'function') showToast('Zdjęto odłożenie', 'info', 1600);
+  }
+
+  function closeDeferMenu() {
+    document.querySelectorAll('.zob-defer-pop').forEach(el => el.remove());
+  }
+
+  function openDeferMenu(rowIndex, ev) {
+    if (ev && ev.stopPropagation) ev.stopPropagation();
+    closeDeferMenu();
+    if (!dbSheet || !dbSheet.rows[rowIndex]) return;
+    const defer = getDeferInfo(dbSheet.rows[rowIndex]);
+    const pop = document.createElement('div');
+    pop.className = 'zob-defer-pop';
+    pop.innerHTML = `
+      <div class="zob-defer-pop-h">Odłóż / przypomnienie</div>
+      <div class="zob-defer-actions">
+        <button type="button" class="zob-action-btn" onclick="ZobowiazaniModule.deferDays(${rowIndex}, 1)">+1 dzień</button>
+        <button type="button" class="zob-action-btn" onclick="ZobowiazaniModule.deferDays(${rowIndex}, 3)">+3 dni</button>
+        <button type="button" class="zob-action-btn" onclick="ZobowiazaniModule.deferDays(${rowIndex}, 7)">+7 dni</button>
+        <button type="button" class="zob-action-btn primary" onclick="ZobowiazaniModule.deferPick(${rowIndex})">Wybierz datę</button>
+        ${defer ? `<button type="button" class="zob-action-btn" onclick="ZobowiazaniModule.clearDefer(${rowIndex})">Wyczyść</button>` : ''}
+      </div>
+    `;
+    document.body.appendChild(pop);
+    const pad = 8;
+    let x = ev && ev.clientX != null ? ev.clientX : window.innerWidth / 2 - 110;
+    let y = ev && ev.clientY != null ? ev.clientY : 120;
+    if (ev && ev.currentTarget && ev.currentTarget.getBoundingClientRect) {
+      const r = ev.currentTarget.getBoundingClientRect();
+      x = r.left;
+      y = r.bottom + 6;
+    }
+    pop.style.left = `${Math.max(pad, Math.min(x, window.innerWidth - pop.offsetWidth - pad))}px`;
+    pop.style.top = `${Math.max(pad, Math.min(y, window.innerHeight - pop.offsetHeight - pad))}px`;
+    const hide = (e) => {
+      if (pop.contains(e.target)) return;
+      closeDeferMenu();
+      document.removeEventListener('mousedown', hide, true);
+      document.removeEventListener('keydown', onKey);
+    };
+    const onKey = (e) => { if (e.key === 'Escape') { closeDeferMenu(); document.removeEventListener('mousedown', hide, true); document.removeEventListener('keydown', onKey); } };
+    setTimeout(() => {
+      document.addEventListener('mousedown', hide, true);
+      document.addEventListener('keydown', onKey);
+    }, 0);
   }
 
   function saveData() {
@@ -1363,9 +1411,53 @@ const ZobowiazaniModule = (() => {
 
     const visibleRows = getFilteredRows();
     const fullCols = viewMode === 'list';
+    const drawer = document.querySelector('.zob-drawer');
+    if (drawer) drawer.classList.toggle('compact', !fullCols);
 
     if (!visibleRows.length) {
       list.innerHTML = `<div class="zob-folder-empty">Brak osób spełniających wybrane kryteria</div>`;
+      return;
+    }
+
+    if (!fullCols) {
+      let cards = '';
+      visibleRows.forEach((item) => {
+        const r = item.row;
+        const ri = item.idx;
+        const info = extractPersonInfo(r);
+        const key = personKeyFromInfo(info);
+        const isSelected = ri === selectedRowIndex && activeTabKey === key;
+        const sysCount = getPersonSysCount(r);
+        const st = statusMeta(sysCount);
+        let dots = '';
+        REG_SYSTEMS.forEach(sys => {
+          const sysIdx = dbSheet.columns.indexOf(sys);
+          const sysVal = sysIdx >= 0 ? String(r[sysIdx] || '').trim() : '';
+          const isDone = sysVal !== '' && sysVal.toLowerCase() !== 'pomiń';
+          const isSkip = sysVal.toLowerCase() === 'pomiń';
+          dots += `<span class="zob-dot ${isDone ? 'on' : ''}${isSkip ? ' skip' : ''}" title="${sys}"></span>`;
+        });
+        cards += `
+          <button type="button" class="zob-person-row ${isSelected ? 'is-selected' : ''}" data-ri="${ri}"
+            onclick="ZobowiazaniModule.select(${ri})"
+            oncontextmenu="ZobowiazaniModule.openRowMenu(event, ${ri})">
+            <div class="zob-person-main">
+              <div class="zob-reg-name" title="${escapeHtml(info.name)}">${escapeHtml(info.name)}</div>
+              <div class="zob-systems-dots">${dots}<span class="zob-systems-count">${sysCount}/5</span></div>
+            </div>
+            <span class="zob-status-chip ${st.cls}">${st.label}</span>
+          </button>
+        `;
+      });
+      list.innerHTML = `
+        <div class="zob-person-list-head">
+          <button type="button" class="zob-person-sort ${sortCol === 'name' ? 'is-sorted' : ''}" onclick="ZobowiazaniModule.sortBy('name')">Nazwisko${sortMark('name')}</button>
+          <button type="button" class="zob-person-sort ${sortCol === 'stan' ? 'is-sorted' : ''}" onclick="ZobowiazaniModule.sortBy('stan')">Status${sortMark('stan')}</button>
+        </div>
+        <div class="zob-person-list">${cards}</div>
+      `;
+      const selectedEl = list.querySelector('.zob-person-row.is-selected');
+      if (selectedEl) selectedEl.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
       return;
     }
 
@@ -1375,7 +1467,7 @@ const ZobowiazaniModule = (() => {
       const ri = item.idx;
       const info = extractPersonInfo(r);
       const key = personKeyFromInfo(info);
-      const isSelected = viewMode !== 'list' && ri === selectedRowIndex && activeTabKey === key;
+      const isSelected = false;
       const sysCount = getPersonSysCount(r);
       const st = statusMeta(sysCount);
       const defer = getDeferInfo(r);
@@ -1403,55 +1495,44 @@ const ZobowiazaniModule = (() => {
         <tr class="${isSelected ? 'is-selected' : ''}${pinned ? ' is-pinned' : ''}" data-ri="${ri}"
           onclick="ZobowiazaniModule.select(${ri})"
           oncontextmenu="ZobowiazaniModule.openRowMenu(event, ${ri})">
-          ${fullCols ? `<td style="width:36px;color:var(--zob-ink-soft);font-size:.72rem">${displayIdx + 1}</td>` : ''}
+          <td style="width:36px;color:var(--zob-ink-soft);font-size:.72rem">${displayIdx + 1}</td>
           <td>
             <div class="zob-reg-name" title="${escapeHtml(info.name)}">${escapeHtml(info.name)}</div>
-            ${idLine ? `<div class="zob-reg-ids">${fullCols ? escapeHtml(idLine) : escapeHtml(info.pesel ? `PESEL: ${info.pesel}` : (info.nip ? `NIP: ${info.nip}` : idLine))}</div>` : ''}
-            ${!fullCols ? `<div class="zob-systems-dots">${dots}<span class="zob-systems-count">${sysCount}/5</span></div>` : ''}
-            ${!fullCols ? deferChip : ''}
           </td>
-          ${fullCols ? `<td class="zob-reg-ids">${escapeHtml(idLine || '—')}</td>` : ''}
-          ${fullCols ? `<td title="${escapeHtml(info.adresStr || '')}"><span class="zob-reg-addr">${escapeHtml(adresShort)}</span></td>` : ''}
-          ${fullCols ? `<td>
+          <td class="zob-reg-ids">${escapeHtml(idLine || '—')}</td>
+          <td title="${escapeHtml(info.adresStr || '')}"><span class="zob-reg-addr">${escapeHtml(adresShort)}</span></td>
+          <td>
             <div class="zob-reg-sys">${dots}<span class="zob-reg-sys-count">${sysCount}/5</span></div>
-          </td>` : ''}
-          <td style="text-align:${fullCols ? 'center' : 'right'}"><span class="zob-status-chip ${st.cls}">${st.label}</span></td>
-          ${fullCols ? `<td>${deferChip || '<span class="zob-muted">—</span>'}</td>` : ''}
-          ${fullCols ? `<td class="zob-reg-ids">${escapeHtml(lastAct || '—')}</td>` : ''}
-          ${fullCols ? `<td style="text-align:center" onclick="event.stopPropagation()">
+          </td>
+          <td style="text-align:center"><span class="zob-status-chip ${st.cls}">${st.label}</span></td>
+          <td>${deferChip || '<span class="zob-muted">—</span>'}</td>
+          <td class="zob-reg-ids">${escapeHtml(lastAct || '—')}</td>
+          <td style="text-align:center" onclick="event.stopPropagation()">
             <button type="button" class="zob-pin-btn ${pinned ? 'on' : ''}" title="${pinned ? 'Zdejmij z Biurka' : 'Przypnij do Biurka'}"
               onclick="ZobowiazaniModule.togglePin(decodeURIComponent('${encodeURIComponent(key)}'))">${pinned ? '📌' : '📍'}</button>
-          </td>` : ''}
+          </td>
         </tr>
       `;
     });
 
-    const drawer = document.querySelector('.zob-drawer');
-    if (drawer) drawer.classList.toggle('compact', !fullCols);
-
     list.innerHTML = `
-      <table class="zob-reg-table ${fullCols ? 'zob-reg-full' : 'zob-reg-compact'}">
+      <table class="zob-reg-table zob-reg-full">
         <thead>
           <tr>
-            ${fullCols ? `<th style="width:36px" onclick="ZobowiazaniModule.sortBy('idx')" class="${sortCol === 'idx' ? 'is-sorted' : ''}">#${sortMark('idx')}</th>` : ''}
+            <th style="width:36px" onclick="ZobowiazaniModule.sortBy('idx')" class="${sortCol === 'idx' ? 'is-sorted' : ''}">#${sortMark('idx')}</th>
             <th onclick="ZobowiazaniModule.sortBy('name')" class="${sortCol === 'name' ? 'is-sorted' : ''}">Nazwisko i imię${sortMark('name')}</th>
-            ${fullCols ? `<th onclick="ZobowiazaniModule.sortBy('pesel')" class="${sortCol === 'pesel' ? 'is-sorted' : ''}">PESEL / NIP${sortMark('pesel')}</th>` : ''}
-            ${fullCols ? `<th onclick="ZobowiazaniModule.sortBy('adres')" class="${sortCol === 'adres' ? 'is-sorted' : ''}">Adres${sortMark('adres')}</th>` : ''}
-            ${fullCols ? `<th onclick="ZobowiazaniModule.sortBy('stan')" class="${sortCol === 'stan' ? 'is-sorted' : ''}" style="width:120px">Systemy${sortMark('stan')}</th>` : ''}
-            <th onclick="ZobowiazaniModule.sortBy('stan')" class="${sortCol === 'stan' ? 'is-sorted' : ''}" style="width:${fullCols ? '100px' : '88px'};text-align:${fullCols ? 'center' : 'right'}">Status${sortMark('stan')}</th>
-            ${fullCols ? `<th>Wróć</th>` : ''}
-            ${fullCols ? `<th onclick="ZobowiazaniModule.sortBy('aktywnosc')" class="${sortCol === 'aktywnosc' ? 'is-sorted' : ''}">Ostatnia czynność${sortMark('aktywnosc')}</th>` : ''}
-            ${fullCols ? `<th style="width:44px;text-align:center" title="Biurko">📌</th>` : ''}
+            <th onclick="ZobowiazaniModule.sortBy('pesel')" class="${sortCol === 'pesel' ? 'is-sorted' : ''}">PESEL / NIP${sortMark('pesel')}</th>
+            <th onclick="ZobowiazaniModule.sortBy('adres')" class="${sortCol === 'adres' ? 'is-sorted' : ''}">Adres${sortMark('adres')}</th>
+            <th onclick="ZobowiazaniModule.sortBy('stan')" class="${sortCol === 'stan' ? 'is-sorted' : ''}" style="width:120px">Systemy${sortMark('stan')}</th>
+            <th onclick="ZobowiazaniModule.sortBy('stan')" class="${sortCol === 'stan' ? 'is-sorted' : ''}" style="width:100px;text-align:center">Status${sortMark('stan')}</th>
+            <th>Wróć</th>
+            <th onclick="ZobowiazaniModule.sortBy('aktywnosc')" class="${sortCol === 'aktywnosc' ? 'is-sorted' : ''}">Ostatnia czynność${sortMark('aktywnosc')}</th>
+            <th style="width:44px;text-align:center" title="Biurko">📌</th>
           </tr>
         </thead>
         <tbody>${body}</tbody>
       </table>
     `;
-
-    const selectedEl = list.querySelector('tr.is-selected');
-    if (selectedEl && viewMode !== 'list') {
-      selectedEl.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-    }
   }
 
   function setDetailTab(tabId) {
@@ -1634,7 +1715,7 @@ const ZobowiazaniModule = (() => {
         </div>
         <div class="zob-open-header-actions">
           <button type="button" class="zob-pin-btn ${isPinned(pkey) ? 'on' : ''}" onclick="ZobowiazaniModule.togglePin(decodeURIComponent('${encodeURIComponent(pkey)}'))" title="Biurko">${isPinned(pkey) ? '📌 Biurko' : '📍 Biurko'}</button>
-          <button type="button" class="zob-action-btn" onclick="ZobowiazaniModule.deferDays(${selectedRowIndex}, 3)" title="Odłóż o 3 dni">Odłóż +3</button>
+          <button type="button" class="zob-action-btn" onclick="ZobowiazaniModule.openDeferMenu(${selectedRowIndex}, event)" title="Odłóż / przypomnienie">Odłóż</button>
           <button class="zob-btn-komplet" onclick="ZobowiazaniModule.setAll(${selectedRowIndex})" title="Oznacz komplet">Komplet</button>
           <div class="zob-win-controls">
             <button type="button" class="zob-win-btn archive" onclick="ZobowiazaniModule.archivePerson(${selectedRowIndex})" title="${isArchived(pkey) ? 'Przywróć z archiwum' : 'Archiwizuj'}">${isArchived(pkey) ? 'Przywróć' : 'Archiwizuj'}</button>
@@ -1820,7 +1901,7 @@ const ZobowiazaniModule = (() => {
       { label: 'Otwórz teczkę', action: () => selectRow(ri) },
       'sep',
       { label: pinned ? 'Zdejmij z Biurka' : 'Przypnij do Biurka', action: () => togglePin(key) },
-      { label: 'Odłóż +3 dni', action: () => deferByDays(ri, 3) },
+      { label: 'Odłóż / przypomnienie…', action: () => openDeferMenu(ri, e) },
       { label: archived ? 'Przywróć z Archiwum' : 'Archiwizuj', action: () => archivePerson(ri), danger: !archived },
       'sep',
     ];
@@ -2107,6 +2188,7 @@ const ZobowiazaniModule = (() => {
     refreshFromArkusz,
     deferDays: deferByDays,
     deferPick: deferPickDate,
+    openDeferMenu,
     clearDefer
   };
 
