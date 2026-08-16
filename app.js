@@ -63,9 +63,9 @@ const WorkspaceTabs = (() => {
     zobowiazani: 'Szafka teczek',
     ognivo: 'OGNIVO',
     wro: 'Analityka WRO',
-    zakladka1: 'Akumulator',
+    zakladka1: 'Wklepywator Excel',
     zakladka2: 'Rozliczenia',
-    zakladka3: 'Przelew',
+    zakladka3: 'Druk przelewu',
     zakladka4: 'Balanser',
   };
 

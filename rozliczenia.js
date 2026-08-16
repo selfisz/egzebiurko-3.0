@@ -12,42 +12,34 @@ const RozliczeniaModule = (() => {
 
   const CSS = `
 #rozliczenia-app {
-  --rzl-bg: #f3f4f6;
-  --rzl-card: #ffffff;
-  --rzl-text: #1f2937;
-  --rzl-label: #4b5563;
-  --rzl-border: #d1d5db;
-  --rzl-focus: #3b82f6;
-  --rzl-ok: #10b981;
-  --rzl-err: #ef4444;
-  --rzl-muted: #9ca3af;
   flex: 1; min-height: 0; overflow: auto;
-  background: var(--rzl-bg);
-  color: var(--rzl-text);
-  font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-  padding: 24px 20px;
+  background: transparent;
+  color: var(--tool-ink, #1a2332);
+  font-family: var(--tool-ui, "Source Sans 3", system-ui, sans-serif);
+  padding: 22px 18px;
   box-sizing: border-box;
 }
 #rozliczenia-app .rzl-container {
-  background: var(--rzl-card);
-  padding: 30px;
-  border-radius: 12px;
-  box-shadow: 0 4px 20px rgba(0,0,0,.08);
+  background: var(--tool-cream, #faf6f0);
+  padding: 22px 24px 28px;
+  border-radius: 14px;
+  border: 1px solid var(--tool-edge, #d4c4b0);
+  box-shadow: 0 10px 28px rgba(26,35,50,.07);
   width: 100%;
   max-width: 1000px;
   margin: 0 auto;
   box-sizing: border-box;
 }
 #rozliczenia-app .tabs-header {
-  display: flex; border-bottom: 2px solid #e5e7eb; margin-bottom: 25px; gap: 10px; flex-wrap: wrap;
+  display: flex; border-bottom: 1px solid var(--tool-edge, #d4c4b0); margin-bottom: 22px; gap: 4px; flex-wrap: wrap;
 }
 #rozliczenia-app .tab-btn {
-  background: none; border: none; padding: 12px 24px; font-size: 16px; font-weight: bold;
-  color: var(--rzl-label); cursor: pointer; border-bottom: 3px solid transparent;
-  margin-bottom: -2px; transition: all .2s ease; font-family: inherit;
+  background: none; border: none; padding: 12px 18px; font-size: .92rem; font-weight: 650;
+  color: var(--tool-ink-soft, #3d4a5c); cursor: pointer; border-bottom: 3px solid transparent;
+  margin-bottom: -1px; transition: color .15s, border-color .15s; font-family: inherit;
 }
-#rozliczenia-app .tab-btn:hover { color: var(--rzl-focus); }
-#rozliczenia-app .tab-btn.active { color: var(--rzl-focus); border-bottom: 3px solid var(--rzl-focus); }
+#rozliczenia-app .tab-btn:hover { color: var(--tool-ink, #1a2332); }
+#rozliczenia-app .tab-btn.active { color: var(--tool-spine, #8b3a3a); border-bottom-color: var(--tool-spine, #8b3a3a); }
 #rozliczenia-app .tab-content { display: none; animation: rzlFadeIn .3s ease; }
 #rozliczenia-app .tab-content.active { display: block; }
 @keyframes rzlFadeIn {
@@ -55,131 +47,148 @@ const RozliczeniaModule = (() => {
   to { opacity: 1; transform: translateY(0); }
 }
 #rozliczenia-app h2 {
-  margin-top: 0; font-size: 22px; text-align: center; border-bottom: 2px solid #e5e7eb;
-  padding-bottom: 15px; margin-bottom: 20px; color: var(--rzl-text);
+  margin-top: 0; font-size: 1.35rem; text-align: center;
+  font-family: var(--tool-display, Georgia, serif); font-weight: 700; letter-spacing: -.02em;
+  border-bottom: 1px solid var(--tool-edge, #d4c4b0);
+  padding-bottom: 14px; margin-bottom: 18px; color: var(--tool-ink, #1a2332);
 }
 #rozliczenia-app .columns-wrapper {
-  display: grid; grid-template-columns: 1fr 1fr; gap: 25px; margin-bottom: 20px;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 18px;
 }
 #rozliczenia-app .source-section {
-  padding: 20px; border-radius: 8px; border: 1px solid var(--rzl-border);
+  padding: 16px; border-radius: 12px; border: 1px solid var(--tool-edge, #d4c4b0);
+  background: color-mix(in srgb, var(--tool-paper, #f3ebe0) 70%, var(--tool-cream, #faf6f0));
 }
-#rozliczenia-app .section-arkusz { background: #f8fafc; border-top: 4px solid #3b82f6; }
-#rozliczenia-app .section-system { background: #fdfbf7; border-top: 4px solid #eab308; }
+#rozliczenia-app .section-arkusz { border-top: 3px solid var(--tool-spine, #8b3a3a); }
+#rozliczenia-app .section-system { border-top: 3px solid var(--tool-olive, #5c6b3a); }
 #rozliczenia-app .section-header {
-  display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;
+  display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;
 }
 #rozliczenia-app .section-title {
-  font-size: 16px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px;
+  font-size: .78rem; font-weight: 700; text-transform: uppercase; letter-spacing: .08em;
+  color: var(--tool-ink-soft, #3d4a5c);
 }
 #rozliczenia-app .clear-btn {
-  background: none; border: none; font-size: 18px; cursor: pointer; padding: 4px;
-  border-radius: 4px; transition: background-color .2s;
-  display: flex; align-items: center; justify-content: center;
+  background: none; border: 1px solid transparent; font-size: 16px; cursor: pointer; padding: 4px 6px;
+  border-radius: 6px; transition: background-color .15s, border-color .15s;
+  display: flex; align-items: center; justify-content: center; color: var(--tool-ink-soft, #3d4a5c);
 }
-#rozliczenia-app .clear-btn:hover { background: #e5e7eb; }
+#rozliczenia-app .clear-btn:hover { background: #fff; border-color: var(--tool-spine, #8b3a3a); }
 #rozliczenia-app .form-group { display: flex; flex-direction: column; margin-bottom: 12px; }
 #rozliczenia-app .form-group-split { display: flex; gap: 10px; }
 #rozliczenia-app .form-group-split .form-group { flex: 1; }
 #rozliczenia-app label {
-  font-weight: 600; margin-bottom: 4px; font-size: 13px; color: var(--rzl-label);
+  font-weight: 650; margin-bottom: 4px; font-size: .72rem; text-transform: uppercase;
+  letter-spacing: .04em; color: var(--tool-ink-soft, #3d4a5c);
 }
 #rozliczenia-app input[type="text"] {
-  padding: 8px 12px; border: 1px solid var(--rzl-border); border-radius: 6px;
-  font-size: 15px; transition: all .2s ease; background: #fff; width: 100%; box-sizing: border-box;
-  font-family: inherit; color: var(--rzl-text);
+  padding: 9px 12px; border: 1px solid var(--tool-edge, #d4c4b0); border-radius: 8px;
+  font-size: .95rem; transition: all .15s ease; background: var(--tool-cream, #faf6f0);
+  width: 100%; box-sizing: border-box; font-family: inherit; color: var(--tool-ink, #1a2332);
 }
 #rozliczenia-app input[type="text"]:focus:not([readonly]) {
-  outline: none; border-color: var(--rzl-focus); box-shadow: 0 0 0 3px rgba(59,130,246,.15);
+  outline: none; border-color: var(--tool-spine, #8b3a3a); box-shadow: 0 0 0 3px rgba(139,58,58,.14);
 }
 #rozliczenia-app .readonly-input {
-  background: #fef9c3; font-weight: bold; color: #854d0e; border-color: #fde047; cursor: not-allowed;
+  background: color-mix(in srgb, var(--tool-warn, #9a6b2f) 14%, var(--tool-cream, #faf6f0));
+  font-weight: 700; color: var(--tool-warn, #9a6b2f); border-color: color-mix(in srgb, var(--tool-warn, #9a6b2f) 40%, var(--tool-edge, #d4c4b0)); cursor: not-allowed;
 }
 #rozliczenia-app .readonly-arkusz {
-  background: #e0f2fe; font-weight: bold; color: #0369a1; border-color: #7dd3fc; cursor: not-allowed;
+  background: color-mix(in srgb, var(--tool-spine, #8b3a3a) 10%, var(--tool-cream, #faf6f0));
+  font-weight: 700; color: var(--tool-spine, #8b3a3a);
+  border-color: color-mix(in srgb, var(--tool-spine, #8b3a3a) 35%, var(--tool-edge, #d4c4b0)); cursor: not-allowed;
 }
-#rozliczenia-app .results { display: flex; flex-direction: column; gap: 10px; }
+#rozliczenia-app .results { display: flex; flex-direction: column; gap: 8px; }
 #rozliczenia-app .result-item {
-  padding: 12px 15px; border-radius: 8px; font-size: 14px;
+  padding: 12px 14px; border-radius: 10px; font-size: .88rem;
   display: flex; justify-content: space-between; align-items: center;
-  background: #f9fafb; border: 1px solid #e5e7eb; gap: 12px; flex-wrap: wrap;
+  background: color-mix(in srgb, var(--tool-paper2, #ebe1d4) 55%, var(--tool-cream, #faf6f0));
+  border: 1px solid var(--tool-edge, #d4c4b0); gap: 12px; flex-wrap: wrap;
 }
-#rozliczenia-app .result-label { font-weight: 600; }
-#rozliczenia-app .result-equation { font-size: 12px; color: #6b7280; margin-top: 3px; display: block; }
+#rozliczenia-app .result-label { font-weight: 650; }
+#rozliczenia-app .result-equation { font-size: .72rem; color: var(--tool-ink-soft, #3d4a5c); margin-top: 3px; display: block; }
 #rozliczenia-app .status-badge {
-  padding: 6px 12px; border-radius: 20px; font-size: 12px; font-weight: bold;
-  color: #fff; text-align: center; min-width: 120px;
+  padding: 6px 12px; border-radius: 8px; font-size: .72rem; font-weight: 700;
+  color: #faf6f0; text-align: center; min-width: 120px; letter-spacing: .02em;
 }
-#rozliczenia-app .bg-red { background: var(--rzl-err); }
-#rozliczenia-app .bg-green { background: var(--rzl-ok); }
-#rozliczenia-app .bg-gray { background: var(--rzl-muted); }
+#rozliczenia-app .bg-red { background: var(--tool-err, #8b3a3a); }
+#rozliczenia-app .bg-green { background: var(--tool-ok, #5c6b3a); }
+#rozliczenia-app .bg-gray { background: var(--tool-ink-soft, #3d4a5c); }
 #rozliczenia-app .top-bar {
-  display: flex; justify-content: center; margin-bottom: 15px;
-  background: #eff6ff; padding: 15px; border-radius: 8px; border: 1px dashed #bfdbfe;
+  display: flex; justify-content: center; margin-bottom: 14px;
+  background: color-mix(in srgb, var(--tool-spine, #8b3a3a) 8%, var(--tool-cream, #faf6f0));
+  padding: 14px; border-radius: 10px; border: 1px dashed color-mix(in srgb, var(--tool-spine, #8b3a3a) 35%, var(--tool-edge, #d4c4b0));
 }
 #rozliczenia-app .toggle-paste-btn {
-  width: 100%; padding: 10px; background: #f3f4f6; border: 1px solid #d1d5db;
-  border-radius: 6px; font-weight: bold; color: #4b5563; cursor: pointer;
-  text-align: center; margin-bottom: 15px; transition: background-color .2s; font-family: inherit;
+  width: 100%; padding: 10px; background: var(--tool-cream, #faf6f0);
+  border: 1px solid var(--tool-edge, #d4c4b0); border-radius: 8px; font-weight: 700;
+  color: var(--tool-ink-soft, #3d4a5c); cursor: pointer; text-align: center; margin-bottom: 14px;
+  transition: border-color .15s, color .15s; font-family: inherit;
 }
-#rozliczenia-app .toggle-paste-btn:hover { background: #e5e7eb; }
+#rozliczenia-app .toggle-paste-btn:hover { border-color: var(--tool-spine, #8b3a3a); color: var(--tool-ink, #1a2332); }
 #rozliczenia-app textarea {
-  width: 100%; height: 200px; padding: 12px; border: 1px solid var(--rzl-border);
-  border-radius: 6px; font-family: monospace; font-size: 13px; resize: vertical;
-  box-sizing: border-box; background: #f9fafb; color: var(--rzl-text);
+  width: 100%; height: 200px; padding: 12px; border: 1px solid var(--tool-edge, #d4c4b0);
+  border-radius: 8px; font-family: ui-monospace, monospace; font-size: .82rem; resize: vertical;
+  box-sizing: border-box; background: color-mix(in srgb, var(--tool-paper, #f3ebe0) 60%, var(--tool-cream, #faf6f0));
+  color: var(--tool-ink, #1a2332);
 }
 #rozliczenia-app textarea:focus {
-  outline: none; border-color: var(--rzl-focus);
-  box-shadow: 0 0 0 3px rgba(59,130,246,.15); background: #fff;
+  outline: none; border-color: var(--tool-spine, #8b3a3a);
+  box-shadow: 0 0 0 3px rgba(139,58,58,.14); background: var(--tool-cream, #faf6f0);
 }
-#rozliczenia-app .help-text { font-size: 11px; color: #6b7280; margin-top: 4px; display: block; }
+#rozliczenia-app .help-text { font-size: .7rem; color: var(--tool-ink-soft, #3d4a5c); margin-top: 4px; display: block; }
 #rozliczenia-app .summary-grid {
-  display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 20px;
-  border-top: 2px solid #e5e7eb; padding-top: 20px;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 18px;
+  border-top: 1px solid var(--tool-edge, #d4c4b0); padding-top: 18px;
 }
 #rozliczenia-app .summary-card {
-  padding: 15px; border-radius: 8px; border: 1px solid #e5e7eb; background: #f9fafb;
+  padding: 14px; border-radius: 10px; border: 1px solid var(--tool-edge, #d4c4b0);
+  background: color-mix(in srgb, var(--tool-paper2, #ebe1d4) 50%, var(--tool-cream, #faf6f0));
   display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap;
 }
-#rozliczenia-app .details-table { width: 100%; border-collapse: collapse; margin-top: 15px; font-size: 13px; }
+#rozliczenia-app .details-table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: .82rem; }
 #rozliczenia-app .details-table th,
 #rozliczenia-app .details-table td {
-  padding: 10px; text-align: left; border-bottom: 1px solid #e5e7eb; vertical-align: top;
+  padding: 10px; text-align: left; border-bottom: 1px solid var(--tool-edge, #d4c4b0); vertical-align: top;
 }
 #rozliczenia-app .details-table th {
-  background: #f3f4f6; font-weight: 600; color: var(--rzl-label); position: sticky; top: 0;
+  background: var(--tool-ink, #1a2332); color: var(--tool-cream, #faf6f0);
+  font-weight: 650; position: sticky; top: 0; border-bottom: 2px solid var(--tool-spine, #8b3a3a);
+  font-size: .68rem; text-transform: uppercase; letter-spacing: .05em;
 }
-#rozliczenia-app .row-error { background: #fef2f2; }
-#rozliczenia-app .text-red { color: #dc2626; font-weight: bold; }
-#rozliczenia-app .text-green { color: #16a34a; font-weight: bold; }
-#rozliczenia-app .text-blue-zdp { color: #2563eb; font-weight: 700; }
+#rozliczenia-app .row-error { background: color-mix(in srgb, var(--tool-err, #8b3a3a) 10%, var(--tool-cream, #faf6f0)); }
+#rozliczenia-app .text-red { color: var(--tool-err, #8b3a3a); font-weight: 700; }
+#rozliczenia-app .text-green { color: var(--tool-ok, #5c6b3a); font-weight: 700; }
+#rozliczenia-app .text-blue-zdp { color: var(--tool-spine, #8b3a3a); font-weight: 700; }
 #rozliczenia-app .added-note {
-  display: block; font-size: 11px; color: #6b7280; margin-top: 4px; font-weight: normal;
+  display: block; font-size: .7rem; color: var(--tool-ink-soft, #3d4a5c); margin-top: 4px; font-weight: normal;
 }
 #rozliczenia-app .row-excluded {
-  background: #f9fafb; opacity: .5; text-decoration: line-through; color: #9ca3af;
+  background: color-mix(in srgb, var(--tool-paper2, #ebe1d4) 70%, transparent);
+  opacity: .55; text-decoration: line-through; color: var(--tool-ink-soft, #3d4a5c);
 }
 #rozliczenia-app .action-btn {
   background: none; border: none; cursor: pointer; font-size: 16px; padding: 4px;
-  border-radius: 4px; transition: background .2s;
+  border-radius: 6px; transition: background .15s;
 }
-#rozliczenia-app .action-btn:hover { background: #e5e7eb; }
+#rozliczenia-app .action-btn:hover { background: color-mix(in srgb, var(--tool-paper2, #ebe1d4) 80%, #fff); }
 #rozliczenia-app .btn-restore {
-  font-size: 12px; background: #e5e7eb; padding: 4px 8px; border-radius: 4px;
-  text-decoration: none; display: inline-block; font-weight: bold; color: #374151; border: none; cursor: pointer;
+  font-size: .72rem; background: var(--tool-paper2, #ebe1d4); padding: 4px 8px; border-radius: 6px;
+  text-decoration: none; display: inline-block; font-weight: 700; color: var(--tool-ink, #1a2332);
+  border: 1px solid var(--tool-edge, #d4c4b0); cursor: pointer;
 }
-#rozliczenia-app .btn-add { background: #dcfce7; }
-#rozliczenia-app .btn-add:hover { background: #bbf7d0; }
-#rozliczenia-app .filter-group { display: flex; gap: 10px; margin-bottom: 15px; align-items: center; flex-wrap: wrap; }
-#rozliczenia-app .filter-label { font-size: 13px; font-weight: 600; color: var(--rzl-label); margin-right: 5px; }
+#rozliczenia-app .btn-add { background: color-mix(in srgb, var(--tool-olive, #5c6b3a) 16%, var(--tool-cream, #faf6f0)); }
+#rozliczenia-app .btn-add:hover { background: color-mix(in srgb, var(--tool-olive, #5c6b3a) 28%, var(--tool-cream, #faf6f0)); }
+#rozliczenia-app .filter-group { display: flex; gap: 8px; margin-bottom: 14px; align-items: center; flex-wrap: wrap; }
+#rozliczenia-app .filter-label { font-size: .78rem; font-weight: 650; color: var(--tool-ink-soft, #3d4a5c); margin-right: 4px; }
 #rozliczenia-app .filter-btn {
-  padding: 6px 14px; border: 1px solid var(--rzl-border); border-radius: 20px;
-  background: #fff; cursor: pointer; font-size: 12px; font-weight: bold;
-  color: var(--rzl-label); transition: all .2s; font-family: inherit;
+  padding: 6px 12px; border: 1px solid var(--tool-edge, #d4c4b0); border-radius: 999px;
+  background: var(--tool-cream, #faf6f0); cursor: pointer; font-size: .72rem; font-weight: 700;
+  color: var(--tool-ink-soft, #3d4a5c); transition: all .15s; font-family: inherit;
 }
-#rozliczenia-app .filter-btn:hover { background: #f3f4f6; }
+#rozliczenia-app .filter-btn:hover { border-color: var(--tool-spine, #8b3a3a); color: var(--tool-ink, #1a2332); }
 #rozliczenia-app .filter-btn.active {
-  background: var(--rzl-focus); color: #fff; border-color: var(--rzl-focus);
+  background: var(--tool-ink, #1a2332); color: var(--tool-cream, #faf6f0); border-color: var(--tool-ink, #1a2332);
 }
 @media (max-width: 800px) {
   #rozliczenia-app .columns-wrapper,
@@ -264,7 +273,7 @@ const RozliczeniaModule = (() => {
     </div>
 
     <div class="results">
-      <div class="result-item" style="background:#f0fdf4;border-color:#bbf7d0">
+      <div class="result-item" style="background:color-mix(in srgb, var(--tool-olive) 10%, var(--tool-cream));border-color:color-mix(in srgb, var(--tool-olive) 35%, var(--tool-edge))">
         <div>
           <span class="result-label">1. Weryfikacja Excela</span>
           <span class="result-equation">Kwota Excela = Prowizyjnie + Bezprowizyjnie + Zwrot</span>
@@ -285,7 +294,7 @@ const RozliczeniaModule = (() => {
         </div>
         <span id="status3" class="status-badge bg-gray">OCZEKIWANIE</span>
       </div>
-      <div class="result-item" style="background:#eef2ff;border-color:#c7d2fe">
+      <div class="result-item" style="background:color-mix(in srgb, var(--tool-spine) 8%, var(--tool-cream));border-color:color-mix(in srgb, var(--tool-spine) 30%, var(--tool-edge))">
         <div>
           <span class="result-label">4. Zgodność Całościowa (Krzyżowa)</span>
           <span class="result-equation">Excel Kwota = EGA Kwota (Auto-suma)</span>

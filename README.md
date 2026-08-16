@@ -54,9 +54,9 @@ Otwórz `index.html` dwuklikiem. Potem:
 | Analityka WRO | baza `.js` / `.json` z makra Excel |
 | OGNIVO | odpowiedzi banków `.xml` |
 | Szafka teczek | baza `.json` / `.js` (przycisk **Wczytaj JSON**) albo dane z Arkusza |
-| Akumulator (zakładka 1) | generator wierszy Excela + lista zbiorcza / Ctrl+V z programu A |
+| Wklepywator Excel (zakładka 1) | generator wierszy Excela + lista zbiorcza / Ctrl+V z programu A |
 | Rozliczenia (zakładka 2) | wbudowany weryfikator EXCEL↔EGA + analizator ZDP |
-| Przelew (zakładka 3) | generator druku polecenia przelewu / schematu |
+| Druk przelewu (zakładka 3) | generator druku polecenia przelewu / schematu |
 | Balanser (zakładka 4) | korekta należności / alokacja zwrotu na odsetki |
 | Arkusz | `html/arkusz3.html` (w paczce ZIP) |
 

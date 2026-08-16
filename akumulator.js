@@ -1,7 +1,7 @@
 /* ============================================================
    Egzebiurko 3.0 — akumulator.js
-   Zakładka 1: Generator wierszy Excela (wersja Akumulator)
-   Logika 1:1 — CSS offline (bez CDN), dark mode lokalny.
+   Zakładka 1: Wklepywator Excel (generator wierszy + Ctrl+V)
+   Logika 1:1 — szata jak Szafka teczek (papier + atrament).
    ============================================================ */
 
 'use strict';
@@ -15,187 +15,187 @@ const AkumulatorModule = (() => {
 
   const CSS = `
 #akumulator-app {
-  --aku-bg: #f3f4f6;
-  --aku-card: #fff;
-  --aku-text: #1f2937;
-  --aku-muted: #6b7280;
-  --aku-border: #d1d5db;
-  --aku-input: #f9fafb;
-  --aku-excel: #1D6F42;
-  --aku-blue: #2563eb;
-  --aku-green: #16a34a;
-  --aku-orange: #ea580c;
+  --aku-card: var(--tool-cream, #faf6f0);
+  --aku-text: var(--tool-ink, #1a2332);
+  --aku-muted: var(--tool-ink-soft, #3d4a5c);
+  --aku-border: var(--tool-edge, #d4c4b0);
+  --aku-input: color-mix(in srgb, var(--tool-cream, #faf6f0) 88%, #fff);
+  --aku-excel: var(--tool-excel, #3d6b4f);
   flex: 1; min-height: 0; overflow: auto;
-  background: var(--aku-bg); color: var(--aku-text);
-  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-}
-#akumulator-app.dark {
-  --aku-bg: #111827; --aku-card: #1f2937; --aku-text: #f3f4f6;
-  --aku-muted: #9ca3af; --aku-border: #374151; --aku-input: #374151;
+  background: transparent; color: var(--aku-text);
+  font-family: var(--tool-ui, "Source Sans 3", system-ui, sans-serif);
 }
 #akumulator-app * { box-sizing: border-box; }
 #akumulator-app input[type=number]::-webkit-inner-spin-button,
 #akumulator-app input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 #akumulator-app input[type=number] { -moz-appearance: textfield; }
 #akumulator-app .aku-nav {
-  background: var(--aku-card); box-shadow: 0 1px 3px rgba(0,0,0,.1);
-  padding: 14px 16px; position: sticky; top: 0; z-index: 20;
-  display: flex; justify-content: space-between; align-items: center; gap: 12px;
+  background: color-mix(in srgb, var(--tool-paper2, #ebe1d4) 70%, var(--aku-card));
+  border-bottom: 1px solid var(--aku-border);
+  padding: 14px 18px; position: sticky; top: 0; z-index: 20;
+  display: flex; align-items: center; gap: 12px;
 }
-#akumulator-app .aku-nav h1 { margin: 0; font-size: 1.15rem; font-weight: 700; }
+#akumulator-app .aku-nav h1 {
+  margin: 0; font-family: var(--tool-display, Georgia, serif);
+  font-size: 1.35rem; font-weight: 700; letter-spacing: -.02em; color: var(--aku-text);
+}
 #akumulator-app .aku-badge {
-  font-size: 10px; background: #2563eb; color: #fff; padding: 2px 8px;
-  border-radius: 4px; margin-left: 8px; vertical-align: middle;
+  font-family: var(--tool-ui, system-ui, sans-serif);
+  font-size: 10px; font-weight: 700; letter-spacing: .06em;
+  background: var(--tool-spine, #8b3a3a); color: #faf6f0;
+  padding: 3px 8px; border-radius: 4px; margin-left: 10px; vertical-align: middle;
 }
-#akumulator-app .aku-theme-btn {
-  border: none; background: transparent; cursor: pointer; padding: 8px;
-  border-radius: 999px; font-size: 1.1rem; color: var(--aku-muted);
-}
-#akumulator-app .aku-theme-btn:hover { background: rgba(0,0,0,.06); }
-#akumulator-app.dark .aku-theme-btn:hover { background: rgba(255,255,255,.08); }
-#akumulator-app .aku-main { max-width: 64rem; margin: 0 auto; padding: 16px 16px 48px; display: flex; flex-direction: column; gap: 20px; }
+#akumulator-app .aku-main { max-width: 64rem; margin: 0 auto; padding: 18px 16px 48px; display: flex; flex-direction: column; gap: 18px; }
 #akumulator-app .aku-info {
-  background: #eff6ff; border: 1px solid #bfdbfe; padding: 14px; border-radius: 10px;
-  display: flex; gap: 12px; font-size: .875rem; color: #374151;
+  background: color-mix(in srgb, var(--tool-spine, #8b3a3a) 8%, var(--aku-card));
+  border: 1px solid var(--aku-border); padding: 14px 16px; border-radius: 12px;
+  display: flex; gap: 12px; font-size: .875rem; color: var(--aku-text);
+  border-left: 3px solid var(--tool-spine, #8b3a3a);
 }
-#akumulator-app.dark .aku-info { background: rgba(30,58,138,.35); border-color: #1e3a8a; color: #d1d5db; }
-#akumulator-app .aku-info strong { display: block; color: #1d4ed8; margin-bottom: 2px; }
-#akumulator-app.dark .aku-info strong { color: #93c5fd; }
+#akumulator-app .aku-info strong { display: block; color: var(--tool-spine, #8b3a3a); margin-bottom: 2px; font-weight: 700; }
 #akumulator-app .aku-toast {
   position: fixed; top: 72px; right: 20px; z-index: 60;
-  background: #1f2937; color: #fff; padding: 14px 20px; border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(0,0,0,.2); border-left: 4px solid #22c55e;
+  background: var(--tool-ink, #1a2332); color: var(--tool-cream, #faf6f0);
+  padding: 14px 20px; border-radius: 10px;
+  box-shadow: 0 10px 28px rgba(26,35,50,.22); border-left: 4px solid var(--tool-olive, #5c6b3a);
   transform: translateX(120%); transition: transform .3s; display: flex; gap: 12px; align-items: flex-start;
   max-width: min(360px, 90vw);
 }
-#akumulator-app.dark .aku-toast { background: #fff; color: #111827; }
 #akumulator-app .aku-toast.show { transform: translateX(0); }
-#akumulator-app .aku-toast h4 { margin: 0; font-size: .85rem; }
+#akumulator-app .aku-toast h4 { margin: 0; font-size: .85rem; font-family: var(--tool-display, Georgia, serif); }
 #akumulator-app .aku-toast p { margin: 2px 0 0; font-size: .75rem; opacity: .9; }
-#akumulator-app .aku-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+#akumulator-app .aku-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 @media (max-width: 800px) { #akumulator-app .aku-grid { grid-template-columns: 1fr; } }
 #akumulator-app .aku-card {
-  background: var(--aku-card); border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.08);
-  padding: 18px; border-top: 4px solid #3b82f6;
+  background: var(--aku-card); border-radius: 14px; border: 1px solid var(--aku-border);
+  padding: 18px; box-shadow: 0 8px 24px rgba(26,35,50,.06);
+  border-top: 3px solid var(--tool-spine, #8b3a3a);
 }
-#akumulator-app .aku-card.green { border-top-color: #22c55e; display: flex; flex-direction: column; justify-content: space-between; }
-#akumulator-app .aku-card.orange { border-top-color: #f97316; }
+#akumulator-app .aku-card.green { border-top-color: var(--tool-olive, #5c6b3a); display: flex; flex-direction: column; justify-content: space-between; }
+#akumulator-app .aku-card.orange { border-top-color: var(--tool-warn, #9a6b2f); }
 #akumulator-app .aku-card-head {
   display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; gap: 8px;
 }
-#akumulator-app .aku-card-head h2 { margin: 0; font-size: 1.05rem; font-weight: 600; }
+#akumulator-app .aku-card-head h2 {
+  margin: 0; font-size: 1.05rem; font-weight: 700;
+  font-family: var(--tool-display, Georgia, serif); letter-spacing: -.01em;
+}
 #akumulator-app .aku-link {
   border: none; background: none; cursor: pointer; font-size: .75rem;
   color: var(--aku-muted); font-weight: 600; font-family: inherit;
 }
-#akumulator-app .aku-link:hover { color: #ef4444; }
+#akumulator-app .aku-link:hover { color: var(--tool-spine, #8b3a3a); }
 #akumulator-app .aku-field { margin-bottom: 12px; }
 #akumulator-app .aku-label {
-  display: block; font-size: .7rem; font-weight: 700; text-transform: uppercase;
-  letter-spacing: .04em; color: var(--aku-muted); margin-bottom: 4px;
+  display: block; font-size: .68rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .06em; color: var(--aku-muted); margin-bottom: 4px;
 }
 #akumulator-app .aku-input {
   width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--aku-border);
   background: var(--aku-input); color: var(--aku-text); font: inherit;
 }
-#akumulator-app .aku-input:focus { outline: none; box-shadow: 0 0 0 3px rgba(59,130,246,.25); border-color: #3b82f6; }
+#akumulator-app .aku-input:focus {
+  outline: none; border-color: var(--tool-spine, #8b3a3a);
+  box-shadow: 0 0 0 3px rgba(139,58,58,.14);
+}
 #akumulator-app .uppercase-input { text-transform: uppercase; font-weight: 700; }
 #akumulator-app .aku-date-row { display: flex; align-items: center; gap: 8px; }
 #akumulator-app .aku-icon-btn {
-  padding: 10px; min-width: 44px; border: none; border-radius: 8px; cursor: pointer;
-  background: #e5e7eb; color: #4b5563; font-weight: 700; font-family: inherit;
+  padding: 10px; min-width: 44px; border: 1px solid var(--aku-border); border-radius: 8px; cursor: pointer;
+  background: color-mix(in srgb, var(--tool-paper2, #ebe1d4) 55%, var(--aku-card));
+  color: var(--aku-text); font-weight: 700; font-family: inherit;
 }
-#akumulator-app.dark .aku-icon-btn { background: #374151; color: #d1d5db; }
-#akumulator-app .aku-icon-btn:hover { filter: brightness(.95); }
+#akumulator-app .aku-icon-btn:hover { border-color: var(--tool-spine, #8b3a3a); background: #fff; }
 #akumulator-app .aku-amount-row {
   display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: center; margin-bottom: 10px;
 }
-#akumulator-app .aku-amount-row label { font-size: .875rem; font-weight: 500; }
+#akumulator-app .aku-amount-row label { font-size: .875rem; font-weight: 550; }
 #akumulator-app .amount-input { text-align: right; font-family: ui-monospace, monospace; }
 #akumulator-app .aku-sum-row {
   margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--aku-border);
   display: flex; justify-content: space-between; align-items: flex-end; gap: 12px;
 }
-#akumulator-app .aku-sum-label { font-size: .7rem; text-transform: uppercase; color: var(--aku-muted); font-weight: 700; }
+#akumulator-app .aku-sum-label { font-size: .7rem; text-transform: uppercase; color: var(--aku-muted); font-weight: 700; letter-spacing: .05em; }
 #akumulator-app #displaySum {
   font-size: 2rem; font-weight: 700; color: var(--aku-excel); font-variant-numeric: tabular-nums;
+  font-family: var(--tool-display, Georgia, serif);
 }
-#akumulator-app.dark #displaySum { color: #4ade80; }
 #akumulator-app .aku-settings {
-  background: #e5e7eb; padding: 12px; border-radius: 10px; border: 1px solid var(--aku-border);
+  background: color-mix(in srgb, var(--tool-paper2, #ebe1d4) 65%, var(--aku-card));
+  padding: 12px 14px; border-radius: 12px; border: 1px solid var(--aku-border);
   display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px;
 }
-#akumulator-app.dark .aku-settings { background: #374151; }
 #akumulator-app .aku-row-ctrl {
   display: flex; align-items: center; gap: 6px; background: var(--aku-card);
-  padding: 4px; border-radius: 8px; border: 1px solid var(--aku-border); box-shadow: 0 1px 2px rgba(0,0,0,.04);
+  padding: 4px; border-radius: 8px; border: 1px solid var(--aku-border);
 }
 #akumulator-app .aku-row-ctrl input {
   width: 4rem; text-align: center; font-family: ui-monospace, monospace; font-weight: 700;
   border: none; background: transparent; color: var(--aku-text); font-size: 1rem; padding: 4px;
 }
 #akumulator-app .aku-btn {
-  border: none; border-radius: 8px; padding: 10px 16px; font-weight: 600; cursor: pointer;
+  border: 1px solid var(--aku-border); border-radius: 8px; padding: 10px 16px; font-weight: 600; cursor: pointer;
   font-family: inherit; font-size: .875rem; display: inline-flex; align-items: center; gap: 8px;
+  background: var(--aku-card); color: var(--aku-text);
 }
 #akumulator-app .aku-btn:active { transform: scale(.98); }
-#akumulator-app .aku-btn-ghost { background: var(--aku-card); color: var(--aku-text); box-shadow: 0 1px 2px rgba(0,0,0,.06); }
-#akumulator-app .aku-btn-excel { background: var(--aku-excel); color: #fff; font-weight: 700; }
-#akumulator-app .aku-btn-excel:hover { filter: brightness(1.05); }
+#akumulator-app .aku-btn-ghost:hover { border-color: var(--tool-spine, #8b3a3a); background: #fff; }
+#akumulator-app .aku-btn-excel {
+  background: var(--aku-excel); color: #faf6f0; border-color: transparent; font-weight: 700;
+}
+#akumulator-app .aku-btn-excel:hover { filter: brightness(1.06); }
 #akumulator-app .aku-batch-actions { display: flex; gap: 8px; }
 #akumulator-app #cancelEditBtn {
-  display: none; width: 25%; background: #6b7280; color: #fff; font-weight: 700;
+  display: none; width: 25%; background: var(--aku-muted); color: #faf6f0; font-weight: 700;
   padding: 12px 8px; border: none; border-radius: 12px; cursor: pointer; font-family: inherit;
 }
 #akumulator-app #cancelEditBtn.show { display: block; }
 #akumulator-app #batchActionBtn {
-  flex: 1; width: 100%; background: #2563eb; color: #fff; font-weight: 700;
+  flex: 1; width: 100%; background: var(--tool-spine, #8b3a3a); color: #faf6f0; font-weight: 700;
   padding: 14px; border: none; border-radius: 12px; cursor: pointer; font-family: inherit;
-  box-shadow: 0 4px 12px rgba(37,99,235,.25);
+  box-shadow: 0 6px 16px rgba(139,58,58,.22);
 }
-#akumulator-app #batchActionBtn.saving { background: #16a34a; box-shadow: 0 4px 12px rgba(22,163,74,.25); }
+#akumulator-app #batchActionBtn.saving { background: var(--tool-olive, #5c6b3a); box-shadow: 0 6px 16px rgba(92,107,58,.22); }
 #akumulator-app #batchActionBtn:hover { filter: brightness(1.05); }
 #akumulator-app #batchSection { display: none; }
 #akumulator-app #batchSection.show { display: block; animation: akuFade .3s ease; }
 @keyframes akuFade { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
-#akumulator-app .aku-table-wrap { overflow-x: auto; margin-bottom: 14px; }
+#akumulator-app .aku-table-wrap { overflow-x: auto; margin-bottom: 14px; border-radius: 10px; border: 1px solid var(--aku-border); }
 #akumulator-app table { width: 100%; border-collapse: collapse; font-size: .875rem; }
 #akumulator-app thead th {
-  text-align: left; padding: 10px 12px; font-size: .7rem; text-transform: uppercase;
-  background: #f9fafb; color: #374151; border-bottom: 1px solid var(--aku-border);
+  text-align: left; padding: 10px 12px; font-size: .68rem; text-transform: uppercase; letter-spacing: .06em;
+  background: var(--tool-ink, #1a2332); color: var(--tool-cream, #faf6f0); border-bottom: 2px solid var(--tool-spine, #8b3a3a);
 }
-#akumulator-app.dark thead th { background: #374151; color: #e5e7eb; }
-#akumulator-app tbody td { padding: 10px 12px; border-bottom: 1px solid var(--aku-border); vertical-align: top; }
-#akumulator-app tbody tr:hover { background: rgba(0,0,0,.03); }
-#akumulator-app.dark tbody tr:hover { background: rgba(255,255,255,.04); }
-#akumulator-app .editing-row { background: #eff6ff !important; border-left: 4px solid #3b82f6; }
-#akumulator-app.dark .editing-row { background: #1e3a8a !important; border-left: 4px solid #60a5fa; }
-#akumulator-app .aku-mono { font-family: ui-monospace, monospace; font-size: .75rem; color: #16a34a; font-weight: 700; }
-#akumulator-app.dark .aku-mono { color: #4ade80; }
+#akumulator-app tbody td { padding: 10px 12px; border-bottom: 1px solid var(--aku-border); vertical-align: top; background: var(--aku-card); }
+#akumulator-app tbody tr:nth-child(even) td { background: color-mix(in srgb, var(--tool-paper, #f3ebe0) 55%, transparent); }
+#akumulator-app tbody tr:hover td { background: color-mix(in srgb, var(--tool-paper2, #ebe1d4) 80%, #fff); }
+#akumulator-app .editing-row td {
+  background: color-mix(in srgb, var(--tool-spine, #8b3a3a) 10%, var(--aku-card)) !important;
+  box-shadow: inset 3px 0 0 var(--tool-spine, #8b3a3a);
+}
+#akumulator-app .aku-mono { font-family: ui-monospace, monospace; font-size: .75rem; color: var(--aku-excel); font-weight: 700; }
 #akumulator-app .aku-act-btn {
-  border: none; background: none; cursor: pointer; padding: 6px; font-size: 1rem; color: #3b82f6;
+  border: none; background: none; cursor: pointer; padding: 6px; font-size: 1rem; color: var(--tool-spine, #8b3a3a);
 }
-#akumulator-app .aku-act-btn.danger { color: #ef4444; }
+#akumulator-app .aku-act-btn.danger { color: var(--tool-err, #8b3a3a); }
 #akumulator-app .aku-copy-batch {
-  width: 100%; background: #ea580c; color: #fff; font-weight: 700; padding: 16px;
+  width: 100%; background: var(--tool-warn, #9a6b2f); color: #faf6f0; font-weight: 700; padding: 16px;
   border: none; border-radius: 12px; cursor: pointer; font-family: inherit;
   display: flex; align-items: center; justify-content: center; gap: 12px;
-  box-shadow: 0 4px 12px rgba(234,88,12,.25);
+  box-shadow: 0 6px 16px rgba(154,107,47,.22);
 }
 #akumulator-app .aku-copy-batch:hover { filter: brightness(1.05); }
 #akumulator-app .aku-copy-batch small { display: block; font-weight: 400; opacity: .85; font-size: 10px; margin-top: 4px; }
 #akumulator-app .aku-foot { text-align: center; font-size: .75rem; color: var(--aku-muted); margin-top: 8px; }
-@keyframes akuFlash { 0% { background: rgba(34,197,94,.3); } 100% { background: transparent; } }
+@keyframes akuFlash { 0% { background: color-mix(in srgb, var(--tool-olive, #5c6b3a) 28%, transparent); } 100% { background: transparent; } }
 #akumulator-app .paste-flash { animation: akuFlash .8s ease-out; }
 `;
 
   const HTML = `
 <div class="aku-nav">
-  <div style="display:flex;align-items:center;gap:10px">
-    <span style="font-size:1.4rem">📊</span>
-    <h1>Generator <span class="aku-badge">AKUMULATOR</span></h1>
+  <div>
+    <h1>Wklepywator Excel <span class="aku-badge">CTRL+V</span></h1>
   </div>
-  <button type="button" class="aku-theme-btn" id="akuThemeToggle" title="Tryb jasny/ciemny w module">◐</button>
 </div>
 <div class="aku-main" id="mainContainer">
   <div class="aku-info">
@@ -633,7 +633,7 @@ const AkumulatorModule = (() => {
       main.classList.add('paste-flash');
       setTimeout(() => main.classList.remove('paste-flash'), 800);
     }
-    showToast('Dane wczytane z Akumulatora!');
+    showToast('Dane wczytane z Wklepywatora!');
   }
 
   function ensureCss() {
@@ -669,11 +669,6 @@ const AkumulatorModule = (() => {
       else if (act === 'clearBatch') clearBatch();
       else if (act === 'copyBatchList') copyBatchList();
     });
-
-    const themeBtn = document.getElementById('akuThemeToggle');
-    if (themeBtn) {
-      themeBtn.addEventListener('click', () => root.classList.toggle('dark'));
-    }
 
     const startRow = document.getElementById('startRow');
     if (startRow) startRow.addEventListener('input', updateButtonText);

@@ -14,11 +14,11 @@ const PrzelewModule = (() => {
 
   const CSS = `
 #przelew-app {
-  --prw-bg: #f0f0f0;
-  --prw-panel: 350px;
+  --prw-panel: 340px;
   flex: 1; min-height: 0; overflow: hidden;
-  font-family: Arial, sans-serif;
-  background: var(--prw-bg);
+  font-family: var(--tool-ui, "Source Sans 3", system-ui, sans-serif);
+  background: transparent;
+  color: var(--tool-ink, #1a2332);
   display: flex;
 }
 #przelew-app * { box-sizing: border-box; }
@@ -26,39 +26,64 @@ const PrzelewModule = (() => {
   display: flex; width: 100%; height: 100%; min-height: 0;
 }
 #przelew-app .controls-panel {
-  width: var(--prw-panel); flex-shrink: 0; background: #fff; padding: 20px;
-  border-right: 1px solid #ccc; overflow-y: auto;
-  display: flex; flex-direction: column; gap: 15px;
-  box-shadow: 2px 0 5px rgba(0,0,0,.1); z-index: 10;
+  width: var(--prw-panel); flex-shrink: 0;
+  background: var(--tool-cream, #faf6f0); padding: 18px 18px 20px;
+  border-right: 1px solid var(--tool-edge, #d4c4b0); overflow-y: auto;
+  display: flex; flex-direction: column; gap: 14px;
+  box-shadow: 4px 0 18px rgba(26,35,50,.06); z-index: 10;
 }
 #przelew-app .controls-panel h2 {
-  margin: 0; font-size: 1.2rem; border-bottom: 2px solid #ddd; padding-bottom: 10px; color: #111;
+  margin: 0; font-size: 1.25rem; font-family: var(--tool-display, Georgia, serif);
+  font-weight: 700; letter-spacing: -.02em;
+  border-bottom: 1px solid var(--tool-edge, #d4c4b0); padding-bottom: 10px;
+  color: var(--tool-ink, #1a2332);
 }
 #przelew-app .form-group { display: flex; flex-direction: column; gap: 5px; }
-#przelew-app .form-group label { font-size: .9rem; font-weight: bold; color: #222; }
+#przelew-app .form-group label {
+  font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--tool-ink-soft, #3d4a5c);
+}
 #przelew-app .form-group input {
-  padding: 8px; border: 1px solid #ccc; border-radius: 4px; font: inherit; color: #111;
+  padding: 9px 11px; border: 1px solid var(--tool-edge, #d4c4b0); border-radius: 8px;
+  font: inherit; color: var(--tool-ink, #1a2332); background: color-mix(in srgb, var(--tool-cream, #faf6f0) 90%, #fff);
+}
+#przelew-app .form-group input:focus {
+  outline: none; border-color: var(--tool-spine, #8b3a3a);
+  box-shadow: 0 0 0 3px rgba(139,58,58,.14);
 }
 #przelew-app .print-options {
-  border: 1px solid #eee; padding: 10px; border-radius: 5px; background: #f9f9f9;
+  border: 1px solid var(--tool-edge, #d4c4b0); padding: 12px; border-radius: 10px;
+  background: color-mix(in srgb, var(--tool-paper, #f3ebe0) 70%, var(--tool-cream, #faf6f0));
 }
-#przelew-app .radio-group { display: flex; flex-direction: column; gap: 8px; }
+#przelew-app .print-options > strong,
+#przelew-app .print-options > b,
+#przelew-app .print-options > div:first-child {
+  font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--tool-ink-soft, #3d4a5c);
+}
+#przelew-app .radio-group { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
 #przelew-app .radio-group label {
-  display: flex; align-items: center; gap: 8px; font-weight: normal; cursor: pointer; color: #222;
+  display: flex; align-items: center; gap: 8px; font-weight: 550; cursor: pointer;
+  color: var(--tool-ink, #1a2332); text-transform: none; letter-spacing: 0; font-size: .88rem;
 }
 #przelew-app button.print-btn {
-  background: #333; color: #fff; border: none; padding: 12px; font-size: 1rem;
-  cursor: pointer; margin-top: auto; border-radius: 4px; font-family: inherit;
+  background: var(--tool-spine, #8b3a3a); color: #faf6f0; border: none; padding: 12px;
+  font-size: .95rem; font-weight: 700; cursor: pointer; margin-top: auto; border-radius: 10px;
+  font-family: inherit; box-shadow: 0 6px 16px rgba(139,58,58,.2);
 }
-#przelew-app button.print-btn:hover { background: #000; }
+#przelew-app button.print-btn:hover { background: var(--tool-spine-active, #6e2e2e); }
 #przelew-app .preview-panel {
-  flex: 1; min-width: 0; padding: 40px; overflow: auto;
-  display: flex; flex-direction: column; align-items: center; background: #555;
+  flex: 1; min-width: 0; padding: 28px; overflow: auto;
+  display: flex; flex-direction: column; align-items: center;
+  background:
+    radial-gradient(ellipse 80% 50% at 50% 20%, rgba(139,58,58,.06), transparent 60%),
+    color-mix(in srgb, var(--tool-paper2, #ebe1d4) 55%, var(--tool-paper, #f3ebe0));
 }
 #przelew-app .paper-sheet {
   background: #fff; width: 210mm; min-height: 297mm; padding: 10mm;
-  box-shadow: 0 0 10px rgba(0,0,0,.5); position: relative;
+  box-shadow: 0 12px 36px rgba(26,35,50,.18); position: relative;
   display: flex; flex-direction: column;
+  border: 1px solid var(--tool-edge, #d4c4b0); border-radius: 2px;
 }
 #przelew-app .transfer-form {
   width: 100%; height: 99mm; border: 2px solid #000;
@@ -187,7 +212,7 @@ const PrzelewModule = (() => {
   const HTML = `
 <div class="app-container">
   <div class="controls-panel">
-    <h2>Dane Przelewu</h2>
+    <h2>Druk przelewu</h2>
     <div class="form-group">
       <label>Kwota (PLN)</label>
       <input type="number" step="0.01" id="inputAmount" placeholder="0.00">
@@ -209,7 +234,7 @@ const PrzelewModule = (() => {
       <input type="text" id="inputCaseNo" placeholder="np. 123/2023">
     </div>
     <div class="print-options">
-      <label style="font-weight:bold;display:block;margin-bottom:10px">Tryb Wydruku:</label>
+      <label style="font-weight:700;display:block;margin-bottom:10px;font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;color:var(--tool-ink-soft)">Tryb wydruku</label>
       <div class="radio-group">
         <label><input type="radio" name="printMode" value="transfer" checked> Tylko Przelew (Środek strony)</label>
         <label><input type="radio" name="printMode" value="schema"> Tylko Schemat Tekstowy (Środek strony)</label>

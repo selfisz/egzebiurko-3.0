@@ -182,69 +182,140 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
   background:var(--bg);
 }
 .workspace-tabs{
-  display:flex;align-items:stretch;gap:2px;
+  display:flex;align-items:flex-end;gap:4px;
   flex-shrink:0;
-  padding:6px 8px 0;
-  background:linear-gradient(180deg, #0f1a28 0%, #121f2e 100%);
-  border-bottom:1px solid rgba(255,255,255,.08);
+  padding:8px 10px 0;
+  background:
+    linear-gradient(180deg, #121f2e 0%, #16253b 70%, #1a283c 100%);
   overflow-x:auto;overflow-y:hidden;
   min-height:0;
+  scrollbar-width:thin;
 }
 .workspace-tabs.empty{display:none}
 .ws-tab{
+  position:relative;
   display:inline-flex;align-items:center;gap:8px;
-  max-width:200px;
-  padding:7px 10px 8px 12px;
-  border:1px solid transparent;
+  max-width:220px;
+  padding:8px 11px 10px 14px;
+  border:1px solid rgba(255,255,255,.08);
   border-bottom:none;
-  border-radius:8px 8px 0 0;
-  background:rgba(255,255,255,.04);
-  color:#8ba7c5;
-  font:inherit;font-size:.78rem;
+  border-radius:11px 11px 0 0;
+  background:rgba(255,255,255,.05);
+  color:#8fa6bd;
+  font-family:"Source Sans 3","Segoe UI",system-ui,sans-serif;
+  font-size:.8rem;font-weight:550;
   cursor:pointer;white-space:nowrap;
-  transition:background .12s, color .12s;
+  transition:background .15s, color .15s, border-color .15s, box-shadow .15s;
 }
-.ws-tab:hover{background:rgba(255,255,255,.08);color:#d0e4f5}
+.ws-tab:hover{
+  background:rgba(250,246,240,.12);
+  color:#e8dfd2;
+  border-color:rgba(212,196,176,.25);
+}
 .ws-tab.active{
-  background:var(--bg);
-  color:#1e293b;
-  border-color:rgba(255,255,255,.1);
-  font-weight:650;
-  box-shadow:0 -1px 0 rgba(255,255,255,.06);
+  background:#faf6f0;
+  color:#1a2332;
+  border-color:#d4c4b0;
+  font-weight:700;
+  box-shadow:
+    inset 0 3px 0 #8b3a3a,
+    0 -2px 10px rgba(0,0,0,.18);
+  z-index:2;
 }
-[data-mode="dark"] .ws-tab.active{color:#e2e8f0}
-.ws-tab-label{overflow:hidden;text-overflow:ellipsis}
+[data-mode="dark"] .ws-tab.active{
+  background:#1c1915;
+  color:#e8e2d8;
+  border-color:#3a342c;
+  box-shadow: inset 0 3px 0 #9a4a4a, 0 -2px 10px rgba(0,0,0,.35);
+}
+.ws-tab-label{overflow:hidden;text-overflow:ellipsis;letter-spacing:.01em}
 .ws-tab-x{
   flex-shrink:0;
-  width:18px;height:18px;line-height:16px;
-  border-radius:4px;
+  width:20px;height:20px;line-height:18px;
+  border-radius:6px;
   text-align:center;
-  font-size:14px;opacity:.55;
+  font-size:15px;opacity:.5;
+  transition:opacity .12s, background .12s, color .12s;
 }
-.ws-tab-x:hover{opacity:1;background:rgba(148,163,184,.25)}
-.ws-tab.active .ws-tab-x:hover{background:rgba(15,23,42,.12)}
+.ws-tab-x:hover{opacity:1;background:rgba(148,163,184,.22)}
+.ws-tab.active .ws-tab-x{opacity:.65;color:#8b3a3a}
+.ws-tab.active .ws-tab-x:hover{
+  opacity:1;background:rgba(139,58,58,.14);color:#6e2e2e;
+}
 .workspace-ctx{
   position:fixed;z-index:9999;display:none;
-  min-width:200px;padding:6px;
-  background:#0f1a28;color:#d0e4f5;
-  border:1px solid rgba(255,255,255,.12);
-  border-radius:10px;
-  box-shadow:0 12px 32px rgba(0,0,0,.45);
+  min-width:210px;padding:6px;
+  background:#faf6f0;color:#1a2332;
+  border:1px solid #d4c4b0;
+  border-radius:12px;
+  box-shadow:0 14px 36px rgba(26,35,50,.22);
+  font-family:"Source Sans 3","Segoe UI",system-ui,sans-serif;
   font-size:.82rem;
 }
 .workspace-ctx.open{display:block}
 .workspace-ctx-h{
   padding:6px 10px 8px;font-size:.68rem;font-weight:700;
-  letter-spacing:.06em;text-transform:uppercase;color:#64748b;
+  letter-spacing:.08em;text-transform:uppercase;color:#3d4a5c;
+  font-family:"Fraunces",Georgia,serif;
 }
 .workspace-ctx button{
   display:block;width:100%;text-align:left;
   border:none;background:transparent;color:inherit;
-  font:inherit;padding:8px 10px;border-radius:6px;cursor:pointer;
+  font:inherit;padding:8px 10px;border-radius:8px;cursor:pointer;
 }
-.workspace-ctx button:hover{background:rgba(255,255,255,.08)}
-.workspace-ctx button.danger{color:#fca5a5}
-.workspace-ctx-sep{height:1px;background:rgba(255,255,255,.1);margin:4px 2px}
+.workspace-ctx button:hover{background:color-mix(in srgb, #ebe1d4 80%, #fff)}
+.workspace-ctx button.danger{color:#8b3a3a}
+.workspace-ctx-sep{height:1px;background:#d4c4b0;margin:4px 2px}
+
+/* ═══════════════════════════════════════════════
+   NARZĘDZIA — wspólna szata (Szafka: papier + atrament)
+   ═══════════════════════════════════════════════ */
+#panel-zakladka1,
+#panel-zakladka2,
+#panel-zakladka3,
+#panel-zakladka4{
+  --tool-ink:#1a2332;
+  --tool-ink-soft:#3d4a5c;
+  --tool-paper:#f3ebe0;
+  --tool-paper2:#ebe1d4;
+  --tool-cream:#faf6f0;
+  --tool-spine:#8b3a3a;
+  --tool-spine-active:#6e2e2e;
+  --tool-olive:#5c6b3a;
+  --tool-edge:#d4c4b0;
+  --tool-display:"Fraunces","Iowan Old Style","Palatino Linotype",Georgia,serif;
+  --tool-ui:"Source Sans 3","Segoe UI",system-ui,sans-serif;
+  --tool-excel:#3d6b4f;
+  --tool-ok:#5c6b3a;
+  --tool-err:#8b3a3a;
+  --tool-warn:#9a6b2f;
+  background:
+    radial-gradient(ellipse 100% 70% at 8% 0%, rgba(139,58,58,.07), transparent 55%),
+    linear-gradient(180deg, #e8dfd2 0%, var(--tool-paper) 42%, #e4d9cb 100%);
+  color:var(--tool-ink);
+  font-family:var(--tool-ui);
+}
+[data-mode="dark"] #panel-zakladka1,
+[data-mode="dark"] #panel-zakladka2,
+[data-mode="dark"] #panel-zakladka3,
+[data-mode="dark"] #panel-zakladka4{
+  --tool-ink:#e8e2d8;
+  --tool-ink-soft:#a89f92;
+  --tool-paper:#1c1915;
+  --tool-paper2:#252019;
+  --tool-cream:#16130f;
+  --tool-spine:#9a4a4a;
+  --tool-spine-active:#c46a6a;
+  --tool-olive:#8fa06a;
+  --tool-edge:#3a342c;
+  --tool-excel:#6a9a78;
+  --tool-ok:#8fa06a;
+  --tool-err:#c46a6a;
+  --tool-warn:#c4a06a;
+  background:
+    radial-gradient(ellipse 100% 70% at 8% 0%, rgba(154,74,74,.12), transparent 55%),
+    linear-gradient(180deg, #14110e 0%, var(--tool-paper) 50%, #12100d 100%);
+}
 .module-panel{
   flex:1;min-height:0;overflow:hidden;
   display:flex;flex-direction:column;
@@ -1082,15 +1153,15 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
     <div class="nav-section">Narzędzia</div>
     <button class="nav-btn" data-module="zakladka1" onclick="Router.navigate('zakladka1')">
       <span class="nav-icon">📊</span>
-      <span class="nav-label">Akumulator</span>
+      <span class="nav-label">Wklepywator Excel</span>
     </button>
     <button class="nav-btn" data-module="zakladka2" onclick="Router.navigate('zakladka2')">
       <span class="nav-icon">🧮</span>
       <span class="nav-label">Rozliczenia</span>
     </button>
     <button class="nav-btn" data-module="zakladka3" onclick="Router.navigate('zakladka3')">
-      <span class="nav-icon">🖨️</span>
-      <span class="nav-label">Przelew</span>
+<span class="nav-icon">🖨️</span>
+      <span class="nav-label">Druk przelewu</span>
     </button>
     <button class="nav-btn" data-module="zakladka4" onclick="Router.navigate('zakladka4')">
       <span class="nav-icon">⚖️</span>
