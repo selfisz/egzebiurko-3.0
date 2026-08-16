@@ -146,6 +146,17 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
   font-weight:650;
 }
 .nav-btn.active .nav-icon{color:#60a5fa}
+.nav-btn.is-open:not(.active){
+  box-shadow: inset 3px 0 0 #38bdf8;
+  color:#b8d4f0;
+}
+.nav-btn.is-open .nav-label::after{
+  content:'';
+  display:inline-block;
+  width:6px;height:6px;border-radius:50%;
+  background:#38bdf8;margin-left:8px;vertical-align:middle;
+  opacity:.85;
+}
 .nav-icon{font-size:1.1rem;width:22px;text-align:center;flex-shrink:0}
 .nav-label{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .nav-badge{
@@ -170,6 +181,70 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
   min-height:0;
   background:var(--bg);
 }
+.workspace-tabs{
+  display:flex;align-items:stretch;gap:2px;
+  flex-shrink:0;
+  padding:6px 8px 0;
+  background:linear-gradient(180deg, #0f1a28 0%, #121f2e 100%);
+  border-bottom:1px solid rgba(255,255,255,.08);
+  overflow-x:auto;overflow-y:hidden;
+  min-height:0;
+}
+.workspace-tabs.empty{display:none}
+.ws-tab{
+  display:inline-flex;align-items:center;gap:8px;
+  max-width:200px;
+  padding:7px 10px 8px 12px;
+  border:1px solid transparent;
+  border-bottom:none;
+  border-radius:8px 8px 0 0;
+  background:rgba(255,255,255,.04);
+  color:#8ba7c5;
+  font:inherit;font-size:.78rem;
+  cursor:pointer;white-space:nowrap;
+  transition:background .12s, color .12s;
+}
+.ws-tab:hover{background:rgba(255,255,255,.08);color:#d0e4f5}
+.ws-tab.active{
+  background:var(--bg);
+  color:#1e293b;
+  border-color:rgba(255,255,255,.1);
+  font-weight:650;
+  box-shadow:0 -1px 0 rgba(255,255,255,.06);
+}
+[data-mode="dark"] .ws-tab.active{color:#e2e8f0}
+.ws-tab-label{overflow:hidden;text-overflow:ellipsis}
+.ws-tab-x{
+  flex-shrink:0;
+  width:18px;height:18px;line-height:16px;
+  border-radius:4px;
+  text-align:center;
+  font-size:14px;opacity:.55;
+}
+.ws-tab-x:hover{opacity:1;background:rgba(148,163,184,.25)}
+.ws-tab.active .ws-tab-x:hover{background:rgba(15,23,42,.12)}
+.workspace-ctx{
+  position:fixed;z-index:9999;display:none;
+  min-width:200px;padding:6px;
+  background:#0f1a28;color:#d0e4f5;
+  border:1px solid rgba(255,255,255,.12);
+  border-radius:10px;
+  box-shadow:0 12px 32px rgba(0,0,0,.45);
+  font-size:.82rem;
+}
+.workspace-ctx.open{display:block}
+.workspace-ctx-h{
+  padding:6px 10px 8px;font-size:.68rem;font-weight:700;
+  letter-spacing:.06em;text-transform:uppercase;color:#64748b;
+}
+.workspace-ctx button{
+  display:block;width:100%;text-align:left;
+  border:none;background:transparent;color:inherit;
+  font:inherit;padding:8px 10px;border-radius:6px;cursor:pointer;
+}
+.workspace-ctx button:hover{background:rgba(255,255,255,.08)}
+.workspace-ctx button.danger{color:#fca5a5}
+.workspace-ctx-sep{height:1px;background:rgba(255,255,255,.1);margin:4px 2px}
 .module-panel{
   flex:1;min-height:0;overflow:hidden;
   display:flex;flex-direction:column;
@@ -1004,18 +1079,22 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
       <span class="nav-badge" id="nav-badge-wro" style="display:none"></span>
     </button>
 
-    <div class="nav-section">W przygotowaniu</div>
+    <div class="nav-section">Narzędzia</div>
     <button class="nav-btn" data-module="zakladka1" onclick="Router.navigate('zakladka1')">
-      <span class="nav-icon">◇</span>
-      <span class="nav-label">Zakładka 1</span>
+      <span class="nav-icon">📊</span>
+      <span class="nav-label">Akumulator</span>
     </button>
     <button class="nav-btn" data-module="zakladka2" onclick="Router.navigate('zakladka2')">
-      <span class="nav-icon">◇</span>
-      <span class="nav-label">Zakładka 2</span>
+      <span class="nav-icon">🧮</span>
+      <span class="nav-label">Rozliczenia</span>
     </button>
     <button class="nav-btn" data-module="zakladka3" onclick="Router.navigate('zakladka3')">
-      <span class="nav-icon">◇</span>
-      <span class="nav-label">Zakładka 3</span>
+      <span class="nav-icon">🖨️</span>
+      <span class="nav-label">Przelew</span>
+    </button>
+    <button class="nav-btn" data-module="zakladka4" onclick="Router.navigate('zakladka4')">
+      <span class="nav-icon">⚖️</span>
+      <span class="nav-label">Balanser</span>
     </button>
 
     <div class="nav-spacer"></div>
@@ -1030,6 +1109,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
 
   <!-- ═══ CONTENT ══════════════════════════════════ -->
   <div class="content-area">
+    <div id="workspace-tabs" class="workspace-tabs empty" aria-label="Otwarte zakładki"></div>
 
     <!-- ARKUSZ PANEL -->
     <div class="module-panel" id="panel-arkusz">
@@ -1055,22 +1135,16 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
 
     <!-- PLACEHOLDER PANELS -->
     <div class="module-panel hidden" id="panel-zakladka1">
-      <div class="empty-tab-placeholder">
-        <div class="empty-tab-title">Zakładka 1</div>
-        <div class="empty-tab-hint">Pusta — do uzupełnienia</div>
-      </div>
+      <div id="akumulator-app"></div>
     </div>
     <div class="module-panel hidden" id="panel-zakladka2">
-      <div class="empty-tab-placeholder">
-        <div class="empty-tab-title">Zakładka 2</div>
-        <div class="empty-tab-hint">Pusta — do uzupełnienia</div>
-      </div>
+      <div id="rozliczenia-app"></div>
     </div>
     <div class="module-panel hidden" id="panel-zakladka3">
-      <div class="empty-tab-placeholder">
-        <div class="empty-tab-title">Zakładka 3</div>
-        <div class="empty-tab-hint">Pusta — do uzupełnienia</div>
-      </div>
+      <div id="przelew-app"></div>
+    </div>
+    <div class="module-panel hidden" id="panel-zakladka4">
+      <div id="balanser-app"></div>
     </div>
 
   </div>
@@ -1098,6 +1172,10 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
 <script src="zobowiazani.js"></script>
 <script src="ognivo.js"></script>
 <script src="wro.js"></script>
+<script src="rozliczenia.js"></script>
+<script src="przelew.js"></script>
+<script src="akumulator.js"></script>
+<script src="balanser.js"></script>
 <script src="arkusz.js"></script>
 
 <script>
@@ -1109,10 +1187,16 @@ document.addEventListener('DOMContentLoaded', () => {
   Router.register('wro', WroModule);
   Router.register('arkusz', ArkuszModule);
   Router.register('zobowiazani', ZobowiazaniModule);
+  Router.register('zakladka1', AkumulatorModule);
+  Router.register('zakladka2', RozliczeniaModule);
+  Router.register('zakladka3', PrzelewModule);
+  Router.register('zakladka4', BalanserModule);
 
   // Aktualizuj badges w nav
   SharedStore.on('*', updateNavBadges);
   updateNavBadges();
+
+  WorkspaceTabs.init();
 
   // Załaduj ostatni widok lub Arkusz
   const last = localStorage.getItem('egze3_last_module') || 'arkusz';
