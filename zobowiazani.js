@@ -35,6 +35,7 @@ const ZobowiazaniModule = (() => {
   let openTabs = [];
   let activeTabKey = '';
   let detailTab = 'dane'; // 'dane' | 'systemy' | 'cepik' | 'notatka'
+  let filtersOpen = false;
   let dbErrorMsg = '';
   let folderAnimToken = 0;
   let deskPins = loadJsonKey(DESK_PINS_KEY, []);
@@ -1132,13 +1133,13 @@ const ZobowiazaniModule = (() => {
           <div class="zob-header">
             <div class="zob-title-area">
               <h2 class="zob-mod-title">Szafka teczek</h2>
-              <p class="zob-mod-sub"><strong>${escapeHtml(dbSheet.name || 'Zobowiązani')}</strong> · ${escapeHtml(dataSourceLabel || '—')} · ${dbSheet.rows.length} osób</p>
+              <p class="zob-mod-sub">Przeglądaj i zarządzaj dokumentacją zobowiązanych · <strong>${escapeHtml(dbSheet.name || 'Zobowiązani')}</strong> · ${dbSheet.rows.length} osób</p>
             </div>
             <div class="zob-actions">
-              <button class="zob-action-btn" onclick="ZobowiazaniModule.refreshFromArkusz()" title="Pobierz aktualną bazę z Arkusza">Odśwież z Arkusza</button>
-              <button class="zob-action-btn primary" onclick="ZobowiazaniModule.loadJsonFile()" title="Wczytaj bazę z pliku JSON / JS">Wczytaj JSON</button>
-              <button class="zob-action-btn olive" onclick="ZobowiazaniModule.copyCleanExcel()" title="Kopiuje widoczne teczki jako czysty tekst do Excela">Kopiuj do Excela</button>
-              <button class="zob-action-btn" onclick="ZobowiazaniModule.syncAllCepik()" title="Auto-sync CEPIK z WRO">Auto-Sync CEPIK</button>
+              <button class="zob-action-btn primary" onclick="ZobowiazaniModule.loadJsonFile()" title="Wczytaj bazę z pliku JSON / JS">Wczytaj bazę</button>
+              <button class="zob-action-btn ${filtersOpen ? 'is-on' : ''}" onclick="ZobowiazaniModule.toggleFilters()" title="Pokaż / ukryj filtry">Filtry${activeFilter !== 'all' || filterText ? ' ·' : ''}</button>
+              <button class="zob-action-btn" onclick="ZobowiazaniModule.refreshFromArkusz()" title="Pobierz aktualną bazę z Arkusza">Odśwież</button>
+              <button class="zob-action-btn olive" onclick="ZobowiazaniModule.copyCleanExcel()" title="Kopiuje widoczne teczki jako czysty tekst do Excela">Do Excela</button>
             </div>
           </div>
 
@@ -1157,7 +1158,7 @@ const ZobowiazaniModule = (() => {
             <div class="zob-browser-tabs" id="zob-browser-tabs"></div>
           </div>
 
-          <div class="zob-toolbar">
+          <div class="zob-toolbar ${filtersOpen ? 'filters-open' : 'filters-collapsed'}">
             <div class="zob-tool-top">
               <div class="zob-search-box">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
@@ -1170,7 +1171,7 @@ const ZobowiazaniModule = (() => {
                 Wszystkie <span class="zob-pill-count">${counts.all}</span>
               </button>
               <button class="zob-pill pill-danger ${activeFilter === 'todo' ? 'active' : ''}" onclick="ZobowiazaniModule.setFilter('todo')">
-                Do zrobienia <span class="zob-pill-count">${counts.todo}</span>
+                Braki <span class="zob-pill-count">${counts.todo}</span>
               </button>
               <button class="zob-pill pill-warn ${activeFilter === 'progress' ? 'active' : ''}" onclick="ZobowiazaniModule.setFilter('progress')">
                 W toku <span class="zob-pill-count">${counts.progress}</span>
@@ -1201,8 +1202,8 @@ const ZobowiazaniModule = (() => {
           <div class="zob-split-container mode-${viewMode}" id="zob-split">
             <aside class="zob-drawer" id="zob-drawer">
               <div class="zob-drawer-head">
-                <span class="zob-drawer-head-title">${sectionFilter === 'desk' ? 'Biurko' : sectionFilter === 'archive' ? 'Archiwum' : 'Lista teczek'}</span>
-                <span>klik = otwórz teczkę</span>
+                <span class="zob-drawer-head-title">${sectionFilter === 'desk' ? 'Biurko' : sectionFilter === 'archive' ? 'Archiwum' : 'Lista zobowiązanych'}</span>
+                <span class="zob-drawer-count" id="zob-drawer-count">0</span>
               </div>
               <div class="zob-folder-scroll" id="zob-folder-list"></div>
             </aside>
@@ -1333,6 +1334,8 @@ const ZobowiazaniModule = (() => {
     if (statsEl) {
       statsEl.innerHTML = `Pokazano: <strong>${visibleRows.length}</strong> z <strong>${counts.all}</strong>`;
     }
+    const drawerCount = document.getElementById('zob-drawer-count');
+    if (drawerCount) drawerCount.textContent = String(visibleRows.length);
     const bar = document.getElementById('zob-pills-bar');
     if (!bar) return;
     bar.querySelectorAll('.zob-pill').forEach(btn => {
@@ -1346,7 +1349,7 @@ const ZobowiazaniModule = (() => {
   function statusMeta(sysCount) {
     if (sysCount === REG_SYSTEMS.length) return { cls: 'complete', label: 'Komplet' };
     if (sysCount > 0) return { cls: 'progress', label: 'W toku' };
-    return { cls: 'todo', label: 'Do zrobienia' };
+    return { cls: 'todo', label: 'Braki' };
   }
 
   function sortMark(key) {
@@ -1400,24 +1403,24 @@ const ZobowiazaniModule = (() => {
         <tr class="${isSelected ? 'is-selected' : ''}${pinned ? ' is-pinned' : ''}" data-ri="${ri}"
           onclick="ZobowiazaniModule.select(${ri})"
           oncontextmenu="ZobowiazaniModule.openRowMenu(event, ${ri})">
-          <td style="width:36px;color:var(--zob-ink-soft);font-size:.72rem">${displayIdx + 1}</td>
+          ${fullCols ? `<td style="width:36px;color:var(--zob-ink-soft);font-size:.72rem">${displayIdx + 1}</td>` : ''}
           <td>
             <div class="zob-reg-name" title="${escapeHtml(info.name)}">${escapeHtml(info.name)}</div>
-            ${!fullCols && idLine ? `<div class="zob-reg-ids">${escapeHtml(idLine)}</div>` : ''}
+            ${idLine ? `<div class="zob-reg-ids">${fullCols ? escapeHtml(idLine) : escapeHtml(info.pesel ? `PESEL: ${info.pesel}` : (info.nip ? `NIP: ${info.nip}` : idLine))}</div>` : ''}
             ${!fullCols ? deferChip : ''}
           </td>
           ${fullCols ? `<td class="zob-reg-ids">${escapeHtml(idLine || '—')}</td>` : ''}
           ${fullCols ? `<td title="${escapeHtml(info.adresStr || '')}"><span class="zob-reg-addr">${escapeHtml(adresShort)}</span></td>` : ''}
-          <td>
+          ${fullCols ? `<td>
             <div class="zob-reg-sys">${dots}<span class="zob-reg-sys-count">${sysCount}/5</span></div>
-          </td>
-          <td style="text-align:center"><span class="zob-status-chip ${st.cls}">${st.label}</span></td>
+          </td>` : ''}
+          <td style="text-align:${fullCols ? 'center' : 'right'}"><span class="zob-status-chip ${st.cls}">${st.label}</span></td>
           ${fullCols ? `<td>${deferChip || '<span class="zob-muted">—</span>'}</td>` : ''}
           ${fullCols ? `<td class="zob-reg-ids">${escapeHtml(lastAct || '—')}</td>` : ''}
-          <td style="text-align:center" onclick="event.stopPropagation()">
+          ${fullCols ? `<td style="text-align:center" onclick="event.stopPropagation()">
             <button type="button" class="zob-pin-btn ${pinned ? 'on' : ''}" title="${pinned ? 'Zdejmij z Biurka' : 'Przypnij do Biurka'}"
               onclick="ZobowiazaniModule.togglePin(decodeURIComponent('${encodeURIComponent(key)}'))">${pinned ? '📌' : '📍'}</button>
-          </td>
+          </td>` : ''}
         </tr>
       `;
     });
@@ -1426,15 +1429,15 @@ const ZobowiazaniModule = (() => {
       <table class="zob-reg-table ${fullCols ? 'zob-reg-full' : 'zob-reg-compact'}">
         <thead>
           <tr>
-            <th style="width:36px" onclick="ZobowiazaniModule.sortBy('idx')" class="${sortCol === 'idx' ? 'is-sorted' : ''}">#${sortMark('idx')}</th>
-            <th onclick="ZobowiazaniModule.sortBy('name')" class="${sortCol === 'name' ? 'is-sorted' : ''}">Osoba${sortMark('name')}</th>
+            ${fullCols ? `<th style="width:36px" onclick="ZobowiazaniModule.sortBy('idx')" class="${sortCol === 'idx' ? 'is-sorted' : ''}">#${sortMark('idx')}</th>` : ''}
+            <th onclick="ZobowiazaniModule.sortBy('name')" class="${sortCol === 'name' ? 'is-sorted' : ''}">Nazwisko i imię${sortMark('name')}</th>
             ${fullCols ? `<th onclick="ZobowiazaniModule.sortBy('pesel')" class="${sortCol === 'pesel' ? 'is-sorted' : ''}">PESEL / NIP${sortMark('pesel')}</th>` : ''}
             ${fullCols ? `<th onclick="ZobowiazaniModule.sortBy('adres')" class="${sortCol === 'adres' ? 'is-sorted' : ''}">Adres${sortMark('adres')}</th>` : ''}
-            <th onclick="ZobowiazaniModule.sortBy('stan')" class="${sortCol === 'stan' ? 'is-sorted' : ''}" style="width:120px">Systemy${sortMark('stan')}</th>
-            <th onclick="ZobowiazaniModule.sortBy('stan')" class="${sortCol === 'stan' ? 'is-sorted' : ''}" style="width:100px;text-align:center">Stan${sortMark('stan')}</th>
+            ${fullCols ? `<th onclick="ZobowiazaniModule.sortBy('stan')" class="${sortCol === 'stan' ? 'is-sorted' : ''}" style="width:120px">Systemy${sortMark('stan')}</th>` : ''}
+            <th onclick="ZobowiazaniModule.sortBy('stan')" class="${sortCol === 'stan' ? 'is-sorted' : ''}" style="width:${fullCols ? '100px' : '88px'};text-align:${fullCols ? 'center' : 'right'}">Status${sortMark('stan')}</th>
             ${fullCols ? `<th>Wróć</th>` : ''}
             ${fullCols ? `<th onclick="ZobowiazaniModule.sortBy('aktywnosc')" class="${sortCol === 'aktywnosc' ? 'is-sorted' : ''}">Ostatnia czynność${sortMark('aktywnosc')}</th>` : ''}
-            <th style="width:44px;text-align:center" title="Biurko">📌</th>
+            ${fullCols ? `<th style="width:44px;text-align:center" title="Biurko">📌</th>` : ''}
           </tr>
         </thead>
         <tbody>${body}</tbody>
@@ -1618,11 +1621,12 @@ const ZobowiazaniModule = (() => {
       <div class="zob-open-header" data-anim="${animKey}">
         <div class="zob-open-header-main">
           <div class="zob-open-title">${escapeHtml(info.name)}</div>
-          ${(info.pesel || info.nip) ? `<div class="zob-open-ids">
+          ${(info.pesel || info.nip || info.adresStr) ? `<div class="zob-open-ids">
             ${info.pesel ? `<button type="button" class="zob-id-chip" title="Kopiuj PESEL" onclick="ZobowiazaniModule.copy('${info.pesel}', this)"><span class="lbl">PESEL</span>${info.pesel}</button>` : ''}
             ${info.nip ? `<button type="button" class="zob-id-chip" title="Kopiuj NIP" onclick="ZobowiazaniModule.copy('${info.nip}', this)"><span class="lbl">NIP</span>${info.nip}</button>` : ''}
+            ${info.adresStr ? `<button type="button" class="zob-open-addr" title="Kopiuj adres" onclick="ZobowiazaniModule.copy(decodeURIComponent('${encodeURIComponent(info.adresStr)}'), this)">${escapeHtml(info.adresStr)}</button>` : ''}
           </div>` : ''}
-          <div class="zob-open-sub">Teczka #${selectedRowIndex + 1} · <span class="zob-status-chip ${st.cls}">${st.label}</span> · ${sysCount}/5 systemów${defer ? ` · <span class="zob-defer-chip ${defer.due ? 'due' : 'wait'}">${defer.due ? 'Do powrotu' : 'Na później'} ${escapeHtml(defer.raw)}</span>` : ''}</div>
+          <div class="zob-open-sub"><span class="zob-status-chip ${st.cls}">${st.label}</span> · ${sysCount}/5 systemów · #${selectedRowIndex + 1}${defer ? ` · <span class="zob-defer-chip ${defer.due ? 'due' : 'wait'}">${defer.due ? 'Do powrotu' : 'Na później'} ${escapeHtml(defer.raw)}</span>` : ''}</div>
         </div>
         <div class="zob-open-header-actions">
           <button type="button" class="zob-pin-btn ${isPinned(pkey) ? 'on' : ''}" onclick="ZobowiazaniModule.togglePin(decodeURIComponent('${encodeURIComponent(pkey)}'))" title="Biurko">${isPinned(pkey) ? '📌 Biurko' : '📍 Biurko'}</button>
@@ -1959,7 +1963,36 @@ const ZobowiazaniModule = (() => {
 
   function setFilter(filterKey) {
     activeFilter = filterKey;
+    if (filterKey !== 'all') filtersOpen = true;
+    const tb = document.querySelector('#zobowiazani-app .zob-toolbar');
+    if (tb) {
+      tb.classList.toggle('filters-open', filtersOpen);
+      tb.classList.toggle('filters-collapsed', !filtersOpen);
+    }
+    document.querySelectorAll('#zobowiazani-app .zob-actions .zob-action-btn').forEach(b => {
+      if ((b.getAttribute('onclick') || '').includes('toggleFilters')) {
+        b.classList.toggle('is-on', filtersOpen);
+        const mark = activeFilter !== 'all' || filterText ? ' ·' : '';
+        b.textContent = `Filtry${mark}`;
+      }
+    });
     renderViews();
+  }
+
+  function toggleFilters() {
+    filtersOpen = !filtersOpen;
+    const tb = document.querySelector('#zobowiazani-app .zob-toolbar');
+    if (tb) {
+      tb.classList.toggle('filters-open', filtersOpen);
+      tb.classList.toggle('filters-collapsed', !filtersOpen);
+    }
+    document.querySelectorAll('#zobowiazani-app .zob-actions .zob-action-btn').forEach(b => {
+      if ((b.getAttribute('onclick') || '').includes('toggleFilters')) {
+        b.classList.toggle('is-on', filtersOpen);
+        const mark = activeFilter !== 'all' || filterText ? ' ·' : '';
+        b.textContent = `Filtry${mark}`;
+      }
+    });
   }
 
   function sortBy(colKey) {
@@ -2039,6 +2072,7 @@ const ZobowiazaniModule = (() => {
     toggle: toggleSystem,
     setAll: setAllSystems,
     setFilter,
+    toggleFilters,
     setSection,
     sortBy,
     setTab: setDetailTab,
