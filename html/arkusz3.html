@@ -366,6 +366,7 @@ table.grid{border-collapse:separate;border-spacing:0;width:max-content;min-width
       <span class="sep"></span>
       <button class="btn sm" id="btnSyncToBase" type="button" title="Przenieś oznaczenia z listy do bazy Zobowiązanych (tryb Z bazą). Osoby spoza bazy → dialog.">Synchronizuj z bazą</button>
       <button class="btn sm" id="btnAddToBase" type="button" title="Porównaj listę z bazą i dodaj tylko brakujące osoby (nie rusza istniejących)">Dodaj do bazy</button>
+      <button class="btn sm primary" id="btnRefreshExcel" type="button" title="Wczytaj nowy plik Excel/CSV i porównaj z ★ Zobowiązani: nowe osoby + oznaczenie do Archiwum w Szafce" style="color:#fff">Odśwież z Excela</button>
       <button class="btn sm" id="btnSetKeyCol" type="button" title="Gdy lista nie wykrywa PESEL/NIP automatycznie — wskaż ręcznie, która kolumna to identyfikator osoby">Która kolumna = PESEL?</button>
       <button class="btn sm" id="btnRegDossier" type="button" title="Szybki podgląd: co o osobie jest w Zobowiązanych i na parkingu Na później">Podgląd osoby</button>
       <button class="btn sm" id="btnRegGuard" type="button" title="Na liście raportu podświetla osoby, które już mają czynność w bazie — żeby nie robić drugi raz">Oznacz już obróbione</button>
@@ -473,6 +474,8 @@ Po obróbce: System dziś / Komplet → data + znacznik listy w Źródłach.<br>
 <div class="dlg hidden" id="findDlg"></div>
 <div class="dlg hidden" id="statusDlg"></div>
 <div class="dlg hidden" id="dossierDlg"></div>
+<div class="dlg hidden" id="excelRefreshDlg" style="width:min(560px,94vw)"></div>
+<input type="file" id="fileExcelRefresh" accept=".csv,.tsv,.txt,.html,.htm,text/csv,text/tab-separated-values,text/plain,text/html" hidden>
 <div id="panicCover" class="panic-cover" hidden>
   <div class="panic-doc">
     <div class="panic-seal">Dziennik Ustaw</div>
@@ -2999,7 +3002,7 @@ function syncWorkModeUI(){
       ?'Włącz tryb „Z bazą" aby używać oznaczeń systemowych'
       :b.dataset.sysToday+' dziś + źródło listy';
   });
-  ['btnRegComplete','btnRegTrio','btnAddToBase','btnSysNieFiguruje'].forEach(id=>{
+  ['btnRegComplete','btnRegTrio','btnAddToBase','btnSysNieFiguruje','btnRefreshExcel'].forEach(id=>{
     const el=$(id); if(el){ el.disabled=(App.workMode==='adhoc'); }
   });
   const syncBtn=$('btnSyncToBase');
@@ -4319,6 +4322,311 @@ function addMissingToRegistry(){
   toast('Dodaj do bazy: +'+added+' nowych · już było '+known+(skipped?' · bez klucza '+skipped:''));
 }
 
+const SZAFKA_ARCHIVE_KEY='egze3_archive_ids';
+
+function readSzafkaArchiveMap(){
+  try{
+    const raw=localStorage.getItem(SZAFKA_ARCHIVE_KEY);
+    if(!raw) return {};
+    const v=JSON.parse(raw);
+    return (v && typeof v==='object' && !Array.isArray(v)) ? v : {};
+  }catch(_){ return {}; }
+}
+function writeSzafkaArchiveMap(map){
+  try{ localStorage.setItem(SZAFKA_ARCHIVE_KEY, JSON.stringify(map||{})); }catch(_){}
+  try{
+    if(window.parent && window.parent!==window && window.parent.ZobowiazaniModule && typeof window.parent.ZobowiazaniModule.applyArchiveIds==='function'){
+      /* parent odświeży przy wejściu w Szafkę — mapa już w localStorage */
+    }
+  }catch(_){}
+}
+
+function detectKeyColFromBuilt(built){
+  if(!built||!built.headers) return -1;
+  const headers=built.headers;
+  const nameHit=headers.findIndex(h=>/^(pesel|nip)$/i.test(norm(h)) || /\bpesel\b/i.test(h) || /\bnip\b/i.test(h));
+  if(nameHit>=0) return nameHit;
+  const sample=built.rows.slice(0, Math.min(40, built.rows.length));
+  let best=-1, bestScore=0;
+  for(let ci=0; ci<headers.length; ci++){
+    let hits=0, filled=0;
+    sample.forEach(r=>{
+      const k=cleanId(r[ci]);
+      if(!k) return;
+      filled++;
+      if(/^\d{11}$/.test(k) || /^\d{10}$/.test(k)) hits++;
+    });
+    if(filled && hits/filled>=0.5 && hits>bestScore){ bestScore=hits; best=ci; }
+  }
+  return best;
+}
+
+function extractExcelPersonKeys(built, keyCi){
+  const out=[];
+  const seen=new Set();
+  const nameCi=built.headers.findIndex(h=>/nazwisk|imi[eę]|osoba|nazwa/i.test(String(h||'')));
+  built.rows.forEach((r,i)=>{
+    const key=cleanId(r[keyCi]);
+    if(!key || (!/^\d{11}$/.test(key) && !/^\d{10}$/.test(key))) return;
+    if(seen.has(key)) return;
+    seen.add(key);
+    const name=nameCi>=0 ? norm(r[nameCi]) : '';
+    out.push({key, name, rowIndex:i});
+  });
+  return out;
+}
+
+function parseExcelRefreshText(text, fileName){
+  const raw=String(text||'');
+  if(!raw.trim()) return null;
+  let matrix=null;
+  if(/<\s*table[\s>]/i.test(raw) || /\.html?$/i.test(fileName||'')){
+    matrix=parseHtml(raw);
+  }
+  if(!matrix||!matrix.length){
+    matrix=parseText(raw);
+  }
+  if(!matrix||!matrix.length) return null;
+  return build(matrix);
+}
+
+async function readExcelRefreshFile(file){
+  const text=await file.text();
+  return parseExcelRefreshText(text, file.name||'');
+}
+
+function openExcelRefreshDlg(diff){
+  const dlg=$('excelRefreshDlg'), bd=$('backdrop');
+  if(!dlg||!bd) return;
+  const esc=s=>String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  const newItems=diff.added||[];
+  const missItems=diff.missing||[];
+  dlg.innerHTML=`<h3>Odśwież z Excela</h3>
+    <p class="hint">Porównanie z ★ Zobowiązani. Nowe osoby trafią do bazy. Osoby tylko w bazie możesz przenieść do <strong>Archiwum w Szafce</strong> (zostają w Arkuszu).</p>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin:8px 0 12px;font-size:.85rem">
+      <span><strong style="color:var(--ok,#16a34a)">+${newItems.length}</strong> nowych</span>
+      <span><strong style="color:var(--warn,#b45309)">${missItems.length}</strong> do archiwum</span>
+      <span>${diff.matched||0} bez zmian</span>
+    </div>
+    <div style="max-height:42vh;overflow:auto;display:flex;flex-direction:column;gap:14px">
+      <div>
+        <div style="font-weight:700;font-size:.8rem;margin-bottom:6px">Nowe — dodaj do bazy</div>
+        ${newItems.length? newItems.map((p,i)=>`
+          <label style="display:flex;gap:8px;align-items:flex-start;padding:4px 0;font-size:.82rem;cursor:pointer">
+            <input type="checkbox" class="exr-add" data-i="${i}" checked>
+            <span><code>${esc(p.key)}</code>${p.name?(' · '+esc(p.name)):''}</span>
+          </label>`).join('') : '<div class="hint">Brak nowych osób</div>'}
+      </div>
+      <div>
+        <div style="font-weight:700;font-size:.8rem;margin-bottom:6px">Brak w pliku — archiwum Szafki</div>
+        ${missItems.length? missItems.map((p,i)=>`
+          <label style="display:flex;gap:8px;align-items:flex-start;padding:4px 0;font-size:.82rem;cursor:pointer">
+            <input type="checkbox" class="exr-arch" data-i="${i}" checked>
+            <span><code>${esc(p.key)}</code>${p.name?(' · '+esc(p.name)):''}</span>
+          </label>`).join('') : '<div class="hint">Wszystkie osoby z bazy są w pliku</div>'}
+      </div>
+    </div>
+    <div class="actions" style="margin-top:14px;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
+      <button class="btn ghost" type="button" id="exrCancel">Anuluj</button>
+      <button class="btn primary" type="button" id="exrApply" style="color:#fff">Zastosuj</button>
+    </div>`;
+  dlg.classList.remove('hidden');
+  bd.classList.remove('hidden');
+
+  const close=()=>{ dlg.classList.add('hidden'); bd.classList.add('hidden'); };
+  dlg.querySelector('#exrCancel').onclick=close;
+  dlg.querySelector('#exrApply').onclick=()=>{
+    const toAdd=[];
+    dlg.querySelectorAll('.exr-add:checked').forEach(cb=>{
+      const p=newItems[+cb.dataset.i];
+      if(p) toAdd.push(p);
+    });
+    const toArch=[];
+    dlg.querySelectorAll('.exr-arch:checked').forEach(cb=>{
+      const p=missItems[+cb.dataset.i];
+      if(p) toArch.push(p);
+    });
+    applyExcelRefresh({added:toAdd, archive:toArch});
+    close();
+  };
+}
+
+function applyExcelRefresh({added, archive}){
+  const reg=ensureRegistrySheet(false);
+  if(!reg){ toast('Brak bazy Zobowiązanych'); return; }
+  pushUndo();
+  ensureCol(reg,'NIP',130);
+  ensureCol(reg,'PESEL',130);
+  REG_SYSTEMS.forEach(n=>ensureCol(reg,n,100));
+  REG_META.forEach(n=>ensureCol(reg,n, isMetaTextCol(n)?META_TEXT_COL_W:110));
+
+  let addN=0;
+  (added||[]).forEach(p=>{
+    const key=cleanId(p.key);
+    if(!key) return;
+    if(findRegistryRowByKey(reg, key)!=null) return;
+    const dest=ensureRegistryPerson(reg, key);
+    if(dest>=0 && p.name){
+      let nci=reg.columns.findIndex(c=>/nazwisk|imi[eę]|osoba|nazwa/i.test(String(c||'')));
+      if(nci<0) nci=ensureCol(reg,'Nazwisko',160);
+      if(nci>=0){
+        padSheetRow(reg, dest);
+        if(!norm(reg.rows[dest][nci])) reg.rows[dest][nci]=p.name;
+      }
+    }
+    addN++;
+  });
+
+  const archList=archive||[];
+  if(archList.length){
+    const map=readSzafkaArchiveMap();
+    const at=new Date().toISOString();
+    archList.forEach(p=>{
+      const key=cleanId(p.key);
+      if(!key) return;
+      map[key]={ at, name:p.name||'', reason:'Odśwież z Excela' };
+    });
+    writeSzafkaArchiveMap(map);
+  }
+
+  refreshRegistryDerived(reg);
+  render();
+  scheduleAutosave();
+  toast('Odświeżono: +'+addN+' do bazy'+(archList.length?(', '+archList.length+' → Archiwum Szafki'):''));
+}
+
+function diffExcelVsRegistry(built){
+  const keyCi=detectKeyColFromBuilt(built);
+  if(keyCi<0){
+    toast('Nie wykryto kolumny PESEL/NIP w pliku');
+    return null;
+  }
+  const excelPeople=extractExcelPersonKeys(built, keyCi);
+  if(!excelPeople.length){
+    toast('W pliku brak poprawnych PESEL/NIP');
+    return null;
+  }
+  const reg=ensureRegistrySheet(false);
+  if(!reg){ toast('Brak bazy Zobowiązanych — włącz „Z bazą”'); return null; }
+
+  const excelKeys=new Set(excelPeople.map(p=>p.key));
+  const idIndex=registryIdentityIndex(reg);
+  const nameCi=reg.columns.findIndex(c=>/nazwisk|imi[eę]|osoba|nazwa/i.test(String(c||'')));
+
+  const added=excelPeople.filter(p=>findRegistryRowByKey(reg, p.key)==null);
+  const missing=[];
+  const seenMiss=new Set();
+  reg.rows.forEach((r,ri)=>{
+    const keys=[];
+    const pci=findSystemCol(reg,'PESEL');
+    const nci=findSystemCol(reg,'NIP');
+    const kci=findKeyColumn(reg);
+    [pci,nci,kci].forEach(ci=>{
+      if(ci==null||ci<0) return;
+      const k=cleanId(r[ci]);
+      if(k && (/^\d{11}$/.test(k)||/^\d{10}$/.test(k))) keys.push(k);
+    });
+    // także z identity index — weź pierwszy klucz wiersza
+    if(!keys.length){
+      for(const [k,idx] of idIndex.entries()){
+        if(idx===ri){ keys.push(k); break; }
+      }
+    }
+    const primary=keys[0];
+    if(!primary || seenMiss.has(primary)) return;
+    if(keys.some(k=>excelKeys.has(k))) return;
+    seenMiss.add(primary);
+    missing.push({
+      key: primary,
+      name: nameCi>=0 ? norm(r[nameCi]) : '',
+      rowIndex: ri
+    });
+  });
+
+  let matched=0;
+  excelPeople.forEach(p=>{ if(findRegistryRowByKey(reg, p.key)!=null) matched++; });
+
+  return { added, missing, matched, keyCol: built.headers[keyCi] };
+}
+
+function triggerExcelRefresh(){
+  if(App.workMode==='adhoc'){
+    toast('Włącz tryb „Z bazą” (u góry), żeby odświeżać Zobowiązanych');
+    return;
+  }
+  const dlg=$('excelRefreshDlg'), bd=$('backdrop');
+  if(!dlg||!bd) return;
+  dlg.innerHTML=`<h3>Odśwież z Excela</h3>
+    <p class="hint">Porównaj nową listę z ★ Zobowiązani. Format jak przy zwykłym wklejaniu: CSV / TSV / tabela HTML / tekst z Excela.</p>
+    <div class="actions" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+      <button class="btn primary" type="button" id="exrFile" style="color:#fff">Wybierz plik…</button>
+      <button class="btn" type="button" id="exrPaste">Wklej ze schowka</button>
+      <button class="btn ghost" type="button" id="exrCancel">Anuluj</button>
+    </div>`;
+  dlg.classList.remove('hidden');
+  bd.classList.remove('hidden');
+  const close=()=>{ dlg.classList.add('hidden'); bd.classList.add('hidden'); };
+  dlg.querySelector('#exrCancel').onclick=close;
+  dlg.querySelector('#exrFile').onclick=()=>{
+    close();
+    const inp=$('fileExcelRefresh');
+    if(!inp) return;
+    inp.value='';
+    inp.click();
+  };
+  dlg.querySelector('#exrPaste').onclick=async ()=>{
+    close();
+    try{
+      let built=null;
+      const items=await navigator.clipboard.read();
+      for(const it of items){
+        if(it.types.includes('text/html')){
+          const m=parseHtml(await(await it.getType('text/html')).text());
+          if(m&&m.length){ built=build(m); break; }
+        }
+      }
+      if(!built){
+        for(const it of items){
+          if(it.types.includes('text/plain')){
+            const raw=await(await it.getType('text/plain')).text();
+            built=parseExcelRefreshText(raw, 'clipboard.txt');
+            if(built) break;
+          }
+        }
+      }
+      if(!built||!built.rows.length){ toast('Schowek pusty lub nierozpoznany — skopiuj tabelę z Excela'); return; }
+      const diff=diffExcelVsRegistry(built);
+      if(!diff) return;
+      if(!diff.added.length && !diff.missing.length){
+        toast('Baza jest zgodna z wklejką ('+diff.matched+' osób)');
+        return;
+      }
+      openExcelRefreshDlg(diff);
+    }catch(_){
+      toast('Brak dostępu do schowka — użyj „Wybierz plik” albo Ctrl+V na karcie');
+    }
+  };
+}
+
+async function onExcelRefreshFile(e){
+  const f=e.target.files&&e.target.files[0];
+  e.target.value='';
+  if(!f) return;
+  try{
+    const built=await readExcelRefreshFile(f);
+    if(!built||!built.rows.length){ toast('Nie udało się odczytać pliku'); return; }
+    const diff=diffExcelVsRegistry(built);
+    if(!diff) return;
+    if(!diff.added.length && !diff.missing.length){
+      toast('Baza jest zgodna z plikiem ('+diff.matched+' osób)');
+      return;
+    }
+    openExcelRefreshDlg(diff);
+  }catch(err){
+    toast('Błąd odczytu: '+(err&&err.message?err.message:err));
+  }
+}
+
 function fillRegSysMenu(){ /* legacy no-op */ }
 function openRegistrySheet(){
   setRibbonTab('rejestr', {goBase:true, silent:true, skipRender:true});
@@ -5442,6 +5750,8 @@ document.querySelectorAll('[data-sys-today]').forEach(b=>{
 $('btnRegTrio').onclick=markTrioToday;
 $('btnSyncToBase').onclick=syncListToRegistry;
 $('btnAddToBase').onclick=addMissingToRegistry;
+$('btnRefreshExcel').onclick=triggerExcelRefresh;
+$('fileExcelRefresh').onchange=onExcelRefreshFile;
 $('btnSetKeyCol').onclick=setKeyColumnManual;
 $('btnRegDossier').onclick=openPersonDossier;
 $('btnRegGuard').onclick=runReworkGuard;
@@ -5511,7 +5821,7 @@ document.onclick=e=>{
   if(!e.target.closest('.menu-wrap')){['exportMenu','sheetPickMenu','sheetMoveMenu','schemaMenu','pasteHistMenu','regSysMenu'].forEach(id=>{const el=$(id); if(el) el.classList.remove('open');});}
   if(!e.target.closest('#colFilterPopup')&&!e.target.closest('.filter-btn')) $('colFilterPopup').classList.add('hidden');
   if(!e.target.closest('#ctxMenu')) hideCtx();
-  if(e.target.id==='backdrop'){['rulesDlg','dedupDlg','groupDlg','compareDlg','schemaDlg','pastePdfDlg','findDlg','statusDlg','dossierDlg'].forEach(id=>{const el=$(id); if(el) el.classList.add('hidden');}); $('backdrop').classList.add('hidden');}
+  if(e.target.id==='backdrop'){['rulesDlg','dedupDlg','groupDlg','compareDlg','schemaDlg','pastePdfDlg','findDlg','statusDlg','dossierDlg','excelRefreshDlg'].forEach(id=>{const el=$(id); if(el) el.classList.add('hidden');}); $('backdrop').classList.add('hidden');}
 };
 document.addEventListener('mouseup', ()=>{ App.selecting=false; });
 document.addEventListener('contextmenu', e=>{ if(e.target.closest('#dataGrid')) {/* handled per-row */} });
@@ -5530,7 +5840,7 @@ document.addEventListener('keydown', e=>{
     }
     if(App.editing){ endEdit(false); return; }
     // zamknij otwarte dialogi jednym Esc
-    const openDlg=['rulesDlg','dedupDlg','groupDlg','compareDlg','schemaDlg','pastePdfDlg','findDlg','statusDlg','dossierDlg'].find(id=>{const el=$(id); return el&&!el.classList.contains('hidden');});
+    const openDlg=['rulesDlg','dedupDlg','groupDlg','compareDlg','schemaDlg','pastePdfDlg','findDlg','statusDlg','dossierDlg','excelRefreshDlg'].find(id=>{const el=$(id); return el&&!el.classList.contains('hidden');});
     if(openDlg){ $(openDlg).classList.add('hidden'); $('backdrop').classList.add('hidden'); return; }
     hideCtx();
     ['exportMenu','sheetPickMenu','sheetMoveMenu','schemaMenu','pasteHistMenu','regSysMenu'].forEach(id=>{const el=$(id); if(el) el.classList.remove('open');});

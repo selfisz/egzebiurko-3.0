@@ -160,3 +160,199 @@ window.SharedStore = SharedStore;
 window.Router      = Router;
 window.StatusBar   = StatusBar;
 window.showToast   = showToast;
+
+
+/* ─── PEŁNY PAKIET EGZEBIURKO (zapisz / wczytaj) ───────────── */
+const EgzeBundle = (() => {
+  const BUNDLE_VERSION = 1;
+  const ARKUSZ_KEY = 'ots_autosave_v1';
+  const WRO_DB_KEY = 'egze3_wro_database';
+  const SZAFKA_KEYS = ['egze3_desk_pins', 'egze3_archive_ids', 'egze3_open_tabs', 'egze3_zob_file_source'];
+  const PREF_KEYS = ['egze3_last_module', 'egze3_dark'];
+  const OTS_PREF_KEYS = ['ots_copy_mode_v1', 'ots_work_mode_v1', 'ots_view_prefs_v1', 'ots_schemas_v1'];
+
+  function lsGetRaw(k) {
+    try { return localStorage.getItem(k); } catch { return null; }
+  }
+  function lsSetRaw(k, v) {
+    try { localStorage.setItem(k, v); return true; }
+    catch (e) { console.warn('[EgzeBundle] set failed', k, e); return false; }
+  }
+  function lsGetJson(k, fallback) {
+    try {
+      const raw = localStorage.getItem(k);
+      if (raw == null) return fallback;
+      return JSON.parse(raw);
+    } catch { return fallback; }
+  }
+
+  function collectSharedStore() {
+    const out = {};
+    Object.values(SharedStore.KEYS).forEach(k => {
+      out[k] = SharedStore.get(k, null);
+    });
+    // legacy / dodatkowe klucze WRO używane w module
+    ['wro_analyzed_status', 'wro_cart_status'].forEach(k => {
+      out[k] = SharedStore.get(k, null);
+    });
+    return out;
+  }
+
+  function collectSzafka() {
+    const out = {};
+    SZAFKA_KEYS.forEach(k => {
+      const raw = lsGetRaw(k);
+      if (raw != null) {
+        try { out[k] = JSON.parse(raw); }
+        catch { out[k] = raw; }
+      }
+    });
+    return out;
+  }
+
+  function collectWroDatabase() {
+    try {
+      if (window.WroModule && typeof window.WroModule.getBazaDanych === 'function') {
+        const db = window.WroModule.getBazaDanych();
+        if (db && typeof db === 'object' && Object.keys(db).length) return db;
+      }
+    } catch {}
+    return lsGetJson(WRO_DB_KEY, null);
+  }
+
+  function buildBundle() {
+    let arkusz = null;
+    try {
+      const raw = lsGetRaw(ARKUSZ_KEY);
+      if (raw) arkusz = JSON.parse(raw);
+    } catch {}
+
+    const prefs = {};
+    [...PREF_KEYS, ...OTS_PREF_KEYS].forEach(k => {
+      const v = lsGetRaw(k);
+      if (v != null) prefs[k] = v;
+    });
+
+    return {
+      app: 'egzebiurko',
+      version: BUNDLE_VERSION,
+      savedAt: new Date().toISOString(),
+      arkusz,
+      szafka: collectSzafka(),
+      shared: collectSharedStore(),
+      wroDatabase: collectWroDatabase(),
+      prefs,
+    };
+  }
+
+  function downloadBundle() {
+    const bundle = buildBundle();
+    const hasArkusz = !!(bundle.arkusz && Array.isArray(bundle.arkusz.sheets));
+    const wroN = bundle.wroDatabase ? Object.keys(bundle.wroDatabase).length : 0;
+    const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    const day = new Date().toISOString().slice(0, 10);
+    a.href = URL.createObjectURL(blob);
+    a.download = `Egzebiurko_${day}.egze.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    showToast(
+      `Zapisano całe Egzebiurko` + (hasArkusz ? ' · Arkusz' : '') + (wroN ? ` · WRO ${wroN}` : ''),
+      'success',
+      3200
+    );
+  }
+
+  function applyBundle(bundle) {
+    if (!bundle || bundle.app !== 'egzebiurko') {
+      throw new Error('To nie jest plik Egzebiurko (.egze.json)');
+    }
+
+    if (bundle.arkusz && Array.isArray(bundle.arkusz.sheets)) {
+      lsSetRaw(ARKUSZ_KEY, JSON.stringify(bundle.arkusz));
+    }
+
+    if (bundle.szafka && typeof bundle.szafka === 'object') {
+      Object.keys(bundle.szafka).forEach(k => {
+        const v = bundle.szafka[k];
+        lsSetRaw(k, typeof v === 'string' ? v : JSON.stringify(v));
+      });
+    }
+
+    if (bundle.shared && typeof bundle.shared === 'object') {
+      Object.keys(bundle.shared).forEach(k => {
+        const v = bundle.shared[k];
+        if (v == null) SharedStore.remove(k);
+        else SharedStore.set(k, v);
+      });
+    }
+
+    if (bundle.wroDatabase && typeof bundle.wroDatabase === 'object') {
+      const ok = lsSetRaw(WRO_DB_KEY, JSON.stringify(bundle.wroDatabase));
+      if (!ok) {
+        showToast('Baza WRO za duża na localStorage — wczytaj ją osobno w Analityce WRO', 'info', 4500);
+      }
+      try {
+        if (window.WroModule && typeof window.WroModule.importBazaDanych === 'function') {
+          window.WroModule.importBazaDanych(bundle.wroDatabase);
+        } else {
+          window.WroDatabase = bundle.wroDatabase;
+        }
+      } catch {}
+    }
+
+    if (bundle.prefs && typeof bundle.prefs === 'object') {
+      Object.keys(bundle.prefs).forEach(k => {
+        if (bundle.prefs[k] != null) lsSetRaw(k, String(bundle.prefs[k]));
+      });
+    }
+  }
+
+  async function loadBundleFromFile(file) {
+    const text = await file.text();
+    let data;
+    try { data = JSON.parse(text); }
+    catch { throw new Error('Plik nie jest poprawnym JSON'); }
+
+    // Pojedynczy skoroszyt Arkusza (.ots.json) — też akceptuj
+    if (data && Array.isArray(data.sheets) && data.app !== 'egzebiurko') {
+      lsSetRaw(ARKUSZ_KEY, JSON.stringify(data));
+      showToast('Wczytano skoroszyt Arkusza — odświeżam…', 'success', 2000);
+      setTimeout(() => location.reload(), 400);
+      return;
+    }
+
+    applyBundle(data);
+    showToast('Wczytano całe Egzebiurko — odświeżam…', 'success', 2200);
+    setTimeout(() => location.reload(), 450);
+  }
+
+  function triggerLoad() {
+    const inp = document.getElementById('egze-bundle-file');
+    if (!inp) return;
+    inp.value = '';
+    inp.click();
+  }
+
+  function bindUi() {
+    const btnSave = document.getElementById('btn-egze-save');
+    const btnLoad = document.getElementById('btn-egze-load');
+    const inp = document.getElementById('egze-bundle-file');
+    if (btnSave) btnSave.addEventListener('click', () => {
+      try { downloadBundle(); }
+      catch (e) { showToast('Nie udało się zapisać: ' + (e.message || e), 'error', 4000); }
+    });
+    if (btnLoad) btnLoad.addEventListener('click', triggerLoad);
+    if (inp) inp.addEventListener('change', async (e) => {
+      const f = e.target.files && e.target.files[0];
+      e.target.value = '';
+      if (!f) return;
+      try { await loadBundleFromFile(f); }
+      catch (err) { showToast(err.message || String(err), 'error', 4500); }
+    });
+  }
+
+  return { buildBundle, downloadBundle, loadBundleFromFile, bindUi, WRO_DB_KEY };
+})();
+
+window.EgzeBundle = EgzeBundle;

@@ -12,6 +12,9 @@ const ZobowiazaniModule = (() => {
   const REG_SYSTEMS = ['KAWA', 'SINF', 'UFG', 'JPK', 'INFZ'];
   const DEFER_COL = 'Wróć';
   const FILE_SOURCE_KEY = 'egze3_zob_file_source';
+  const DESK_PINS_KEY = 'egze3_desk_pins';
+  const ARCHIVE_IDS_KEY = 'egze3_archive_ids';
+  const OPEN_TABS_KEY = 'egze3_open_tabs';
 
   let activated = false;
   let dbData = null;
@@ -22,13 +25,109 @@ const ZobowiazaniModule = (() => {
   // Stan filtrów i widoku
   let filterText = '';
   let activeFilter = 'all'; // 'all', 'todo', 'progress', 'complete', 'deferred', 'due', 'has_cepik', 'no_*'
+  let sectionFilter = 'active'; // 'active' | 'desk' | 'archive'
   let sortCol = 'idx';
   let sortDir = 1;
   let selectedRowIndex = 0;
-  let detailOpen = true;
+  /** @type {'list'|'split'|'focus'} */
+  let viewMode = 'list';
+  /** @type {{key:string, rowIndex:number, name:string}[]} */
+  let openTabs = [];
+  let activeTabKey = '';
   let detailTab = 'dane'; // 'dane' | 'systemy' | 'cepik' | 'notatka'
   let dbErrorMsg = '';
   let folderAnimToken = 0;
+  let deskPins = loadJsonKey(DESK_PINS_KEY, []);
+  let archiveMap = loadJsonKey(ARCHIVE_IDS_KEY, {});
+  if (!Array.isArray(deskPins)) deskPins = [];
+  if (!archiveMap || typeof archiveMap !== 'object' || Array.isArray(archiveMap)) archiveMap = {};
+  restoreOpenTabs();
+
+  function loadJsonKey(key, fallback) {
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) return fallback;
+      const v = JSON.parse(raw);
+      return v == null ? fallback : v;
+    } catch {
+      return fallback;
+    }
+  }
+
+  function saveJsonKey(key, value) {
+    try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
+  }
+
+  function restoreOpenTabs() {
+    const saved = loadJsonKey(OPEN_TABS_KEY, null);
+    if (!saved || !Array.isArray(saved.tabs)) return;
+    openTabs = saved.tabs.map(t => ({
+      key: String(t.key || ''),
+      rowIndex: Number(t.rowIndex) || 0,
+      name: String(t.name || 'Teczka'),
+    })).filter(t => t.key);
+    activeTabKey = String(saved.active || (openTabs[0] && openTabs[0].key) || '');
+    if (openTabs.length && activeTabKey) {
+      const t = openTabs.find(x => x.key === activeTabKey) || openTabs[0];
+      selectedRowIndex = t.rowIndex;
+      viewMode = 'split';
+    }
+  }
+
+  function persistOpenTabs() {
+    saveJsonKey(OPEN_TABS_KEY, { tabs: openTabs, active: activeTabKey });
+  }
+
+  function persistDeskPins() {
+    saveJsonKey(DESK_PINS_KEY, deskPins);
+  }
+
+  function persistArchive() {
+    saveJsonKey(ARCHIVE_IDS_KEY, archiveMap);
+  }
+
+  function personKeyFromInfo(info) {
+    const id = String(info.pesel || info.nip || '').replace(/\D/g, '');
+    if (id) return id;
+    return 'row:' + String(info.name || '').trim().toLowerCase();
+  }
+
+  function personKeyFromRow(row) {
+    return personKeyFromInfo(extractPersonInfo(row));
+  }
+
+  function isPinned(key) {
+    return deskPins.includes(key);
+  }
+
+  function isArchived(key) {
+    return !!(archiveMap && archiveMap[key]);
+  }
+
+  function getLastActivity(row) {
+    if (!dbSheet || !row) return '';
+    let best = null;
+    let bestRaw = '';
+    REG_SYSTEMS.forEach(sys => {
+      const idx = dbSheet.columns.indexOf(sys);
+      if (idx < 0) return;
+      const raw = String(row[idx] || '').trim();
+      if (!raw || raw.toLowerCase() === 'pomiń') return;
+      const d = parseDatePl(raw);
+      if (d && (!best || d > best)) {
+        best = d;
+        bestRaw = raw;
+      } else if (!d && !bestRaw) {
+        bestRaw = raw;
+      }
+    });
+    const defer = getDeferInfo(row);
+    if (defer && defer.date && (!best || defer.date > best)) {
+      best = defer.date;
+      bestRaw = defer.raw;
+    }
+    return bestRaw || (best ? best.toLocaleDateString('pl-PL') : '');
+  }
 
   /* ─── NORMALIZACJA / WYBÓR ARKUSZA ─────────────────────── */
   function normalizeToDbData(parsed) {
@@ -849,6 +948,15 @@ const ZobowiazaniModule = (() => {
     
     let rowsWithIndex = dbSheet.rows.map((row, idx) => ({ row, idx }));
 
+    // Sekcje: Aktywne / Biurko / Archiwum
+    rowsWithIndex = rowsWithIndex.filter(item => {
+      const key = personKeyFromRow(item.row);
+      const archived = isArchived(key);
+      if (sectionFilter === 'archive') return archived;
+      if (sectionFilter === 'desk') return isPinned(key) && !archived;
+      return !archived; // active
+    });
+
     if (filterText) {
       const query = filterText.toLowerCase();
       rowsWithIndex = rowsWithIndex.filter(item => {
@@ -906,6 +1014,18 @@ const ZobowiazaniModule = (() => {
         const cB = getPersonSysCount(b.row);
         return (cA - cB) * sortDir;
       });
+    } else if (sortCol === 'adres') {
+      rowsWithIndex.sort((a, b) => {
+        const nA = extractPersonInfo(a.row).adresStr.toLowerCase();
+        const nB = extractPersonInfo(b.row).adresStr.toLowerCase();
+        return nA.localeCompare(nB, 'pl') * sortDir;
+      });
+    } else if (sortCol === 'aktywnosc') {
+      rowsWithIndex.sort((a, b) => {
+        const dA = parseDatePl(getLastActivity(a.row)) || new Date(0);
+        const dB = parseDatePl(getLastActivity(b.row)) || new Date(0);
+        return (dA - dB) * sortDir;
+      });
     } else if (typeof sortCol === 'number' && sortCol >= 0) {
       rowsWithIndex.sort((a, b) => {
         const valA = String(a.row[sortCol] || '').toLowerCase();
@@ -923,10 +1043,32 @@ const ZobowiazaniModule = (() => {
     return rowsWithIndex;
   }
 
+  function computeSectionCounts() {
+    if (!dbSheet || !dbSheet.rows) return { active: 0, desk: 0, archive: 0 };
+    let active = 0, desk = 0, archive = 0;
+    dbSheet.rows.forEach(r => {
+      const key = personKeyFromRow(r);
+      if (isArchived(key)) archive++;
+      else {
+        active++;
+        if (isPinned(key)) desk++;
+      }
+    });
+    return { active, desk, archive };
+  }
+
   function computeFilterCounts() {
     if (!dbSheet || !dbSheet.rows) return { all: 0, todo: 0, progress: 0, complete: 0, cepik: 0, deferred: 0, due: 0 };
     let todo = 0, progress = 0, complete = 0, cepikCount = 0, deferred = 0, due = 0;
+    let scoped = 0;
     dbSheet.rows.forEach(r => {
+      const key = personKeyFromRow(r);
+      const archived = isArchived(key);
+      if (sectionFilter === 'archive' && !archived) return;
+      if (sectionFilter === 'desk' && (!(isPinned(key) && !archived))) return;
+      if (sectionFilter === 'active' && archived) return;
+      scoped++;
+
       const c = getPersonSysCount(r);
       if (c === 0) todo++;
       else if (c === REG_SYSTEMS.length) complete++;
@@ -941,7 +1083,7 @@ const ZobowiazaniModule = (() => {
         if (def.due) due++;
       }
     });
-    return { all: dbSheet.rows.length, todo, progress, complete, cepik: cepikCount, deferred, due };
+    return { all: scoped, todo, progress, complete, cepik: cepikCount, deferred, due };
   }
 
   /* ─── RENDEROWANIE GŁÓWNEGO WIDOKU ─────────────────────── */
@@ -983,21 +1125,36 @@ const ZobowiazaniModule = (() => {
       }
 
       const counts = computeFilterCounts();
+      const sec = computeSectionCounts();
 
       container.innerHTML = `
         <div class="zob-wrap">
           <div class="zob-header">
             <div class="zob-title-area">
               <h2 class="zob-mod-title">Szafka teczek</h2>
-              <p class="zob-mod-sub">Lista jak w Arkuszu + otwarta teczka po prawej · <strong>${escapeHtml(dbSheet.name || 'Zobowiązani')}</strong> · ${escapeHtml(dataSourceLabel || '—')} · ${dbSheet.rows.length} osób</p>
+              <p class="zob-mod-sub"><strong>${escapeHtml(dbSheet.name || 'Zobowiązani')}</strong> · ${escapeHtml(dataSourceLabel || '—')} · ${dbSheet.rows.length} osób</p>
             </div>
             <div class="zob-actions">
               <button class="zob-action-btn" onclick="ZobowiazaniModule.refreshFromArkusz()" title="Pobierz aktualną bazę z Arkusza">Odśwież z Arkusza</button>
               <button class="zob-action-btn primary" onclick="ZobowiazaniModule.loadJsonFile()" title="Wczytaj bazę z pliku JSON / JS">Wczytaj JSON</button>
               <button class="zob-action-btn olive" onclick="ZobowiazaniModule.copyCleanExcel()" title="Kopiuje widoczne teczki jako czysty tekst do Excela">Kopiuj do Excela</button>
               <button class="zob-action-btn" onclick="ZobowiazaniModule.syncAllCepik()" title="Auto-sync CEPIK z WRO">Auto-Sync CEPIK</button>
-              <button class="zob-action-btn" onclick="ZobowiazaniModule.toggleDetailPane()" title="Pokaż/Ukryj otwartą teczkę">Teczka</button>
             </div>
+          </div>
+
+          <div class="zob-chrome">
+            <div class="zob-sections" id="zob-sections-bar">
+              <button type="button" class="zob-section-btn ${sectionFilter === 'desk' ? 'active' : ''}" onclick="ZobowiazaniModule.setSection('desk')">
+                Biurko <span class="zob-section-count">${sec.desk}</span>
+              </button>
+              <button type="button" class="zob-section-btn ${sectionFilter === 'active' ? 'active' : ''}" onclick="ZobowiazaniModule.setSection('active')">
+                Aktywne <span class="zob-section-count">${sec.active}</span>
+              </button>
+              <button type="button" class="zob-section-btn ${sectionFilter === 'archive' ? 'active' : ''}" onclick="ZobowiazaniModule.setSection('archive')">
+                Archiwum <span class="zob-section-count">${sec.archive}</span>
+              </button>
+            </div>
+            <div class="zob-browser-tabs" id="zob-browser-tabs"></div>
           </div>
 
           <div class="zob-toolbar">
@@ -1041,15 +1198,15 @@ const ZobowiazaniModule = (() => {
             </div>
           </div>
 
-          <div class="zob-split-container">
-            <aside class="zob-drawer">
+          <div class="zob-split-container mode-${viewMode}" id="zob-split">
+            <aside class="zob-drawer" id="zob-drawer">
               <div class="zob-drawer-head">
-                <span class="zob-drawer-head-title">Zobowiązani — lista</span>
+                <span class="zob-drawer-head-title">${sectionFilter === 'desk' ? 'Biurko' : sectionFilter === 'archive' ? 'Archiwum' : 'Lista teczek'}</span>
                 <span>klik = otwórz teczkę</span>
               </div>
               <div class="zob-folder-scroll" id="zob-folder-list"></div>
             </aside>
-            <section class="zob-folder-open ${detailOpen ? '' : 'collapsed'}" id="zob-detail-pane">
+            <section class="zob-folder-open" id="zob-detail-pane">
               <div id="zob-detail-content"></div>
             </section>
           </div>
@@ -1105,10 +1262,67 @@ const ZobowiazaniModule = (() => {
   }
 
   /* ─── RENDEROWANIE WIDOKÓW (LISTA TECZEK + OTWARTA) ───── */
+  function applyViewMode() {
+    const split = document.getElementById('zob-split');
+    if (split) {
+      split.classList.remove('mode-list', 'mode-split', 'mode-focus');
+      split.classList.add('mode-' + viewMode);
+    }
+  }
+
+  function renderBrowserTabs() {
+    const el = document.getElementById('zob-browser-tabs');
+    if (!el) return;
+    if (!openTabs.length) {
+      el.innerHTML = `<div class="zob-tabs-empty">Brak otwartych teczek — kliknij osobę na liście</div>`;
+      return;
+    }
+    el.innerHTML = openTabs.map(t => `
+      <button type="button" class="zob-btab ${t.key === activeTabKey ? 'active' : ''}" title="${escapeHtml(t.name)}"
+        onclick="ZobowiazaniModule.activateTab(decodeURIComponent('${encodeURIComponent(t.key)}'))">
+        <span class="zob-btab-label">${escapeHtml(t.name)}</span>
+        <span class="zob-btab-x" onclick="event.stopPropagation();ZobowiazaniModule.closeTab(decodeURIComponent('${encodeURIComponent(t.key)}'))" title="Zamknij">×</span>
+      </button>
+    `).join('');
+  }
+
+  function rematchOpenTabs() {
+    if (!dbSheet || !dbSheet.rows) return;
+    openTabs.forEach(t => {
+      const found = dbSheet.rows.findIndex(r => personKeyFromRow(r) === t.key);
+      if (found >= 0) {
+        t.rowIndex = found;
+        t.name = extractPersonInfo(dbSheet.rows[found]).name || t.name;
+      }
+    });
+    if (activeTabKey) {
+      const t = openTabs.find(x => x.key === activeTabKey);
+      if (t) selectedRowIndex = t.rowIndex;
+    }
+  }
+
   function renderViews() {
+    rematchOpenTabs();
+    applyViewMode();
+    renderBrowserTabs();
     renderTableOnly();
     renderDetailOnly();
     updatePillsBar();
+    updateSectionsBar();
+  }
+
+  function updateSectionsBar() {
+    const sec = computeSectionCounts();
+    const bar = document.getElementById('zob-sections-bar');
+    if (!bar) return;
+    bar.querySelectorAll('.zob-section-btn').forEach(btn => {
+      const onclick = btn.getAttribute('onclick') || '';
+      const m = onclick.match(/setSection\('([^']+)'\)/);
+      if (!m) return;
+      btn.classList.toggle('active', m[1] === sectionFilter);
+      const countEl = btn.querySelector('.zob-section-count');
+      if (countEl) countEl.textContent = String(sec[m[1]] ?? 0);
+    });
   }
 
   function updatePillsBar() {
@@ -1144,14 +1358,11 @@ const ZobowiazaniModule = (() => {
     if (!list || !dbSheet) return;
 
     const visibleRows = getFilteredRows();
+    const fullCols = viewMode === 'list';
 
     if (!visibleRows.length) {
       list.innerHTML = `<div class="zob-folder-empty">Brak osób spełniających wybrane kryteria</div>`;
       return;
-    }
-
-    if (!visibleRows.some(item => item.idx === selectedRowIndex)) {
-      selectedRowIndex = visibleRows[0].idx;
     }
 
     let body = '';
@@ -1159,10 +1370,16 @@ const ZobowiazaniModule = (() => {
       const r = item.row;
       const ri = item.idx;
       const info = extractPersonInfo(r);
-      const isSelected = ri === selectedRowIndex;
+      const key = personKeyFromInfo(info);
+      const isSelected = viewMode !== 'list' && ri === selectedRowIndex && activeTabKey === key;
       const sysCount = getPersonSysCount(r);
       const st = statusMeta(sysCount);
       const defer = getDeferInfo(r);
+      const pinned = isPinned(key);
+      const lastAct = getLastActivity(r);
+      const adresShort = (info.adresStr || '').length > 42
+        ? (info.adresStr.slice(0, 40) + '…')
+        : (info.adresStr || '—');
 
       let dots = '';
       REG_SYSTEMS.forEach(sys => {
@@ -1179,29 +1396,42 @@ const ZobowiazaniModule = (() => {
         : '';
 
       body += `
-        <tr class="${isSelected ? 'is-selected' : ''}" onclick="ZobowiazaniModule.select(${ri})">
+        <tr class="${isSelected ? 'is-selected' : ''}${pinned ? ' is-pinned' : ''}" onclick="ZobowiazaniModule.select(${ri})">
           <td style="width:36px;color:var(--zob-ink-soft);font-size:.72rem">${displayIdx + 1}</td>
           <td>
             <div class="zob-reg-name" title="${escapeHtml(info.name)}">${escapeHtml(info.name)}</div>
-            ${idLine ? `<div class="zob-reg-ids">${escapeHtml(idLine)}</div>` : ''}
-            ${deferChip}
+            ${!fullCols && idLine ? `<div class="zob-reg-ids">${escapeHtml(idLine)}</div>` : ''}
+            ${!fullCols ? deferChip : ''}
           </td>
+          ${fullCols ? `<td class="zob-reg-ids">${escapeHtml(idLine || '—')}</td>` : ''}
+          ${fullCols ? `<td title="${escapeHtml(info.adresStr || '')}"><span class="zob-reg-addr">${escapeHtml(adresShort)}</span></td>` : ''}
           <td>
             <div class="zob-reg-sys">${dots}<span class="zob-reg-sys-count">${sysCount}/5</span></div>
           </td>
           <td style="text-align:center"><span class="zob-status-chip ${st.cls}">${st.label}</span></td>
+          ${fullCols ? `<td>${deferChip || '<span class="zob-muted">—</span>'}</td>` : ''}
+          ${fullCols ? `<td class="zob-reg-ids">${escapeHtml(lastAct || '—')}</td>` : ''}
+          <td style="text-align:center" onclick="event.stopPropagation()">
+            <button type="button" class="zob-pin-btn ${pinned ? 'on' : ''}" title="${pinned ? 'Zdejmij z Biurka' : 'Przypnij do Biurka'}"
+              onclick="ZobowiazaniModule.togglePin(decodeURIComponent('${encodeURIComponent(key)}'))">${pinned ? '📌' : '📍'}</button>
+          </td>
         </tr>
       `;
     });
 
     list.innerHTML = `
-      <table class="zob-reg-table">
+      <table class="zob-reg-table ${fullCols ? 'zob-reg-full' : 'zob-reg-compact'}">
         <thead>
           <tr>
             <th style="width:36px" onclick="ZobowiazaniModule.sortBy('idx')" class="${sortCol === 'idx' ? 'is-sorted' : ''}">#${sortMark('idx')}</th>
-            <th onclick="ZobowiazaniModule.sortBy('name')" class="${sortCol === 'name' ? 'is-sorted' : ''}">Osoba / PESEL${sortMark('name')}</th>
+            <th onclick="ZobowiazaniModule.sortBy('name')" class="${sortCol === 'name' ? 'is-sorted' : ''}">Osoba${sortMark('name')}</th>
+            ${fullCols ? `<th onclick="ZobowiazaniModule.sortBy('pesel')" class="${sortCol === 'pesel' ? 'is-sorted' : ''}">PESEL / NIP${sortMark('pesel')}</th>` : ''}
+            ${fullCols ? `<th onclick="ZobowiazaniModule.sortBy('adres')" class="${sortCol === 'adres' ? 'is-sorted' : ''}">Adres${sortMark('adres')}</th>` : ''}
             <th onclick="ZobowiazaniModule.sortBy('stan')" class="${sortCol === 'stan' ? 'is-sorted' : ''}" style="width:120px">Systemy${sortMark('stan')}</th>
             <th onclick="ZobowiazaniModule.sortBy('stan')" class="${sortCol === 'stan' ? 'is-sorted' : ''}" style="width:100px;text-align:center">Stan${sortMark('stan')}</th>
+            ${fullCols ? `<th>Wróć</th>` : ''}
+            ${fullCols ? `<th onclick="ZobowiazaniModule.sortBy('aktywnosc')" class="${sortCol === 'aktywnosc' ? 'is-sorted' : ''}">Ostatnia czynność${sortMark('aktywnosc')}</th>` : ''}
+            <th style="width:44px;text-align:center" title="Biurko">📌</th>
           </tr>
         </thead>
         <tbody>${body}</tbody>
@@ -1209,7 +1439,7 @@ const ZobowiazaniModule = (() => {
     `;
 
     const selectedEl = list.querySelector('tr.is-selected');
-    if (selectedEl) {
+    if (selectedEl && viewMode !== 'list') {
       selectedEl.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
     }
   }
@@ -1237,13 +1467,19 @@ const ZobowiazaniModule = (() => {
     const detailContent = document.getElementById('zob-detail-content');
     if (!detailContent || !dbSheet || !dbSheet.rows) return;
 
+    if (viewMode === 'list' || !activeTabKey) {
+      detailContent.innerHTML = '';
+      return;
+    }
+
     if (selectedRowIndex < 0 || selectedRowIndex >= dbSheet.rows.length) {
-      detailContent.innerHTML = `<div class="zob-folder-empty" style="padding:48px 24px">Wybierz teczkę z szuflady po lewej</div>`;
+      detailContent.innerHTML = `<div class="zob-folder-empty" style="padding:48px 24px">Wybierz teczkę z listy</div>`;
       return;
     }
 
     const r = dbSheet.rows[selectedRowIndex];
     const info = extractPersonInfo(r);
+    const pkey = personKeyFromInfo(info);
     const sysCount = getPersonSysCount(r);
     const visibleRows = getFilteredRows();
     const curVisIdx = visibleRows.findIndex(item => item.idx === selectedRowIndex);
@@ -1368,11 +1604,18 @@ const ZobowiazaniModule = (() => {
 
     detailContent.innerHTML = `
       <div class="zob-open-header" data-anim="${animKey}">
+        <div class="zob-win-controls">
+          <button type="button" class="zob-win-btn" onclick="ZobowiazaniModule.closeActiveTab()" title="Zamknij teczkę">×</button>
+          <button type="button" class="zob-win-btn" onclick="ZobowiazaniModule.minimizeFolder()" title="Minimalizuj (zostaw kartę)">−</button>
+          <button type="button" class="zob-win-btn" onclick="ZobowiazaniModule.toggleFocus()" title="${viewMode === 'focus' ? 'Przywróć listę' : 'Pełny ekran'}">${viewMode === 'focus' ? '⧉' : '⛶'}</button>
+          <button type="button" class="zob-win-btn archive" onclick="ZobowiazaniModule.archivePerson(${selectedRowIndex})" title="Archiwizuj">${isArchived(pkey) ? 'Przywróć' : 'Archiwizuj'}</button>
+        </div>
         <div>
           <div class="zob-open-title">${escapeHtml(info.name)}</div>
           <div class="zob-open-sub">Teczka #${selectedRowIndex + 1} · <span class="zob-status-chip ${st.cls}">${st.label}</span> · ${sysCount}/5 systemów${defer ? ` · <span class="zob-defer-chip ${defer.due ? 'due' : 'wait'}">${defer.due ? 'Do powrotu' : 'Na później'} ${escapeHtml(defer.raw)}</span>` : ''}</div>
         </div>
         <div class="zob-open-header-actions">
+          <button type="button" class="zob-pin-btn ${isPinned(pkey) ? 'on' : ''}" onclick="ZobowiazaniModule.togglePin(decodeURIComponent('${encodeURIComponent(pkey)}'))" title="Biurko">${isPinned(pkey) ? '📌 Biurko' : '📍 Biurko'}</button>
           <button type="button" class="zob-action-btn" onclick="ZobowiazaniModule.deferDays(${selectedRowIndex}, 3)" title="Odłóż o 3 dni">Odłóż +3</button>
           <button class="zob-btn-komplet" onclick="ZobowiazaniModule.setAll(${selectedRowIndex})" title="Oznacz komplet">Komplet</button>
         </div>
@@ -1409,14 +1652,125 @@ const ZobowiazaniModule = (() => {
   }
 
   /* ─── NAWIGACJA I AKCJE ────────────────────────────────── */
-  function selectRow(ri) {
-    selectedRowIndex = ri;
-    if (!detailOpen) {
-      detailOpen = true;
-      const pane = document.getElementById('zob-detail-pane');
-      if (pane) pane.classList.remove('collapsed');
+  function openOrActivateTab(ri) {
+    if (!dbSheet || !dbSheet.rows[ri]) return;
+    const info = extractPersonInfo(dbSheet.rows[ri]);
+    const key = personKeyFromInfo(info);
+    const existing = openTabs.find(t => t.key === key);
+    if (existing) {
+      existing.rowIndex = ri;
+      existing.name = info.name || 'Teczka';
+    } else {
+      openTabs.push({ key, rowIndex: ri, name: info.name || 'Teczka' });
     }
+    activeTabKey = key;
+    selectedRowIndex = ri;
+    if (viewMode === 'list') viewMode = 'split';
+    persistOpenTabs();
+  }
+
+  function selectRow(ri) {
+    openOrActivateTab(ri);
     renderViews();
+  }
+
+  function activateTab(key) {
+    const t = openTabs.find(x => x.key === key);
+    if (!t) return;
+    activeTabKey = key;
+    selectedRowIndex = t.rowIndex;
+    if (viewMode === 'list') viewMode = 'split';
+    persistOpenTabs();
+    renderViews();
+  }
+
+  function closeTab(key) {
+    const idx = openTabs.findIndex(t => t.key === key);
+    if (idx < 0) return;
+    openTabs.splice(idx, 1);
+    if (activeTabKey === key) {
+      if (openTabs.length) {
+        const next = openTabs[Math.max(0, idx - 1)];
+        activeTabKey = next.key;
+        selectedRowIndex = next.rowIndex;
+        if (viewMode === 'list') viewMode = 'split';
+      } else {
+        activeTabKey = '';
+        viewMode = 'list';
+      }
+    }
+    persistOpenTabs();
+    renderViews();
+  }
+
+  function closeActiveTab() {
+    if (activeTabKey) closeTab(activeTabKey);
+    else {
+      viewMode = 'list';
+      renderViews();
+    }
+  }
+
+  function minimizeFolder() {
+    viewMode = 'list';
+    persistOpenTabs();
+    renderViews();
+  }
+
+  function toggleFocus() {
+    if (viewMode === 'focus') viewMode = 'split';
+    else if (activeTabKey) viewMode = 'focus';
+    else return;
+    renderViews();
+  }
+
+  function setSection(sec) {
+    sectionFilter = sec === 'desk' || sec === 'archive' ? sec : 'active';
+    renderViews();
+  }
+
+  function togglePin(key) {
+    key = String(key || '');
+    if (!key) return;
+    const i = deskPins.indexOf(key);
+    if (i >= 0) deskPins.splice(i, 1);
+    else deskPins.push(key);
+    persistDeskPins();
+    renderViews();
+  }
+
+  function archivePerson(ri) {
+    if (!dbSheet || !dbSheet.rows[ri]) return;
+    const info = extractPersonInfo(dbSheet.rows[ri]);
+    const key = personKeyFromInfo(info);
+    if (isArchived(key)) {
+      delete archiveMap[key];
+      if (typeof showToast === 'function') showToast('Przywrócono z archiwum', 'success', 2000);
+    } else {
+      archiveMap[key] = {
+        at: new Date().toISOString(),
+        name: info.name || '',
+        reason: 'ręcznie',
+      };
+      closeTab(key);
+      if (typeof showToast === 'function') showToast('Przeniesiono do Archiwum (Szafka)', 'info', 2500);
+    }
+    persistArchive();
+    renderViews();
+  }
+
+  function applyArchiveIds(ids, meta) {
+    const list = Array.isArray(ids) ? ids : [];
+    list.forEach(id => {
+      const key = String(id || '').replace(/\D/g, '') || String(id || '');
+      if (!key) return;
+      archiveMap[key] = {
+        at: (meta && meta.at) || new Date().toISOString(),
+        name: '',
+        reason: (meta && meta.reason) || 'Odśwież z Excela',
+      };
+    });
+    persistArchive();
   }
 
   function prevPerson() {
@@ -1468,14 +1822,6 @@ const ZobowiazaniModule = (() => {
       sortDir = 1;
     }
     renderViews();
-  }
-
-  function toggleDetailPane() {
-    detailOpen = !detailOpen;
-    const pane = document.getElementById('zob-detail-pane');
-    if (pane) {
-      pane.classList.toggle('collapsed', !detailOpen);
-    }
   }
 
   function copyCleanExcelText() {
@@ -1545,12 +1891,20 @@ const ZobowiazaniModule = (() => {
     toggle: toggleSystem,
     setAll: setAllSystems,
     setFilter,
+    setSection,
     sortBy,
     setTab: setDetailTab,
     prevPerson,
     nextPerson,
     nextTodo,
-    toggleDetailPane,
+    activateTab,
+    closeTab,
+    closeActiveTab,
+    minimizeFolder,
+    toggleFocus,
+    togglePin,
+    archivePerson,
+    applyArchiveIds,
     syncCepik: syncCepikForPerson,
     syncAllCepik: syncAllCepikFromWro,
     copyCleanExcel: copyCleanExcelText,

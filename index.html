@@ -574,6 +574,75 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
 
 /* Split: lista jak Arkusz + otwarta teczka */
 .zob-split-container{flex:1; min-height:0; display:flex; gap:14px; overflow:hidden}
+.zob-split-container.mode-list .zob-drawer{width:100%; max-width:none; flex:1}
+.zob-split-container.mode-list .zob-folder-open{display:none}
+.zob-split-container.mode-split .zob-drawer{width:min(420px, 42%); flex-shrink:0}
+.zob-split-container.mode-focus .zob-drawer{display:none}
+.zob-split-container.mode-focus .zob-folder-open{flex:1}
+
+.zob-chrome{
+  display:flex; flex-direction:column; gap:8px; flex-shrink:0; margin-bottom:4px;
+}
+.zob-sections{display:flex; gap:6px; flex-wrap:wrap; align-items:center}
+.zob-section-btn{
+  font:inherit; font-size:.8rem; font-weight:700; cursor:pointer;
+  border:1px solid var(--zob-edge); background:var(--zob-cream); color:var(--zob-ink-soft);
+  border-radius:10px; padding:7px 12px; display:inline-flex; align-items:center; gap:8px;
+  transition: background .12s, color .12s, border-color .12s;
+}
+.zob-section-btn:hover{color:var(--zob-ink); border-color:var(--zob-spine)}
+.zob-section-btn.active{
+  color:#fff; background:var(--zob-ink); border-color:var(--zob-ink);
+}
+.zob-section-count{
+  font-size:.68rem; font-weight:700; opacity:.75;
+  background:rgba(255,255,255,.14); padding:1px 7px; border-radius:999px;
+}
+.zob-section-btn:not(.active) .zob-section-count{
+  background:color-mix(in srgb, var(--zob-paper2) 80%, #fff); color:var(--zob-ink-soft);
+}
+
+.zob-browser-tabs{
+  display:flex; gap:4px; flex-wrap:wrap; align-items:center; min-height:34px;
+  padding:4px; border-radius:10px; border:1px solid var(--zob-edge);
+  background:color-mix(in srgb, var(--zob-paper2) 55%, var(--zob-cream));
+}
+.zob-tabs-empty{font-size:.72rem; color:var(--zob-ink-soft); padding:4px 8px}
+.zob-btab{
+  font:inherit; font-size:.76rem; font-weight:600; cursor:pointer;
+  display:inline-flex; align-items:center; gap:6px; max-width:200px;
+  border:1px solid transparent; background:transparent; color:var(--zob-ink-soft);
+  border-radius:8px; padding:5px 8px 5px 10px;
+}
+.zob-btab:hover{background:rgba(255,255,255,.55); color:var(--zob-ink)}
+.zob-btab.active{
+  background:var(--zob-cream); color:var(--zob-ink); border-color:var(--zob-edge);
+  box-shadow:0 1px 3px rgba(26,35,50,.08);
+}
+.zob-btab-label{overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.zob-btab-x{
+  width:18px; height:18px; border-radius:4px; display:inline-flex; align-items:center; justify-content:center;
+  font-size:14px; line-height:1; opacity:.55;
+}
+.zob-btab-x:hover{opacity:1; background:rgba(154,60,60,.12); color:var(--zob-spine)}
+
+.zob-win-controls{display:flex; flex-wrap:wrap; gap:4px; width:100%; margin-bottom:6px}
+.zob-open-header{flex-wrap:wrap}
+.zob-win-btn{
+  font:inherit; font-size:.78rem; font-weight:700; cursor:pointer;
+  min-width:28px; height:28px; padding:0 8px; border-radius:6px;
+  border:1px solid var(--zob-edge); background:var(--zob-paper); color:var(--zob-ink);
+}
+.zob-win-btn:hover{border-color:var(--zob-spine); background:#fff}
+.zob-win-btn.archive{margin-left:auto; color:var(--zob-spine)}
+.zob-pin-btn{
+  font:inherit; font-size:.78rem; cursor:pointer; border:1px solid transparent;
+  background:transparent; border-radius:6px; padding:2px 6px; line-height:1.2;
+}
+.zob-pin-btn:hover,.zob-pin-btn.on{background:color-mix(in srgb, var(--zob-spine) 10%, transparent)}
+.zob-reg-addr{font-size:.76rem; color:var(--zob-ink-soft); max-width:220px; display:inline-block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.zob-muted{color:var(--zob-ink-soft); opacity:.65}
+.zob-reg-table.zob-reg-full .zob-reg-name{max-width:240px}
 
 .zob-drawer{
   width:min(520px, 52%); flex-shrink:0; display:flex; flex-direction:column;
@@ -858,6 +927,9 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
     </div>
     <div class="chrome-actions">
       <span class="offline-pill">🔒 Offline · sandbox</span>
+      <button class="chrome-btn" id="btn-egze-save" title="Zapisz całe Egzebiurko (Arkusz + Szafka + WRO/OGNIVO) do jednego pliku JSON">Zapisz wszystko</button>
+      <button class="chrome-btn" id="btn-egze-load" title="Wczytaj pakiet .egze.json albo pojedynczy skoroszyt Arkusza">Wczytaj wszystko</button>
+      <input type="file" id="egze-bundle-file" accept=".json,.egze.json,application/json" hidden>
       <button class="chrome-btn" id="btn-dark" title="Tryb jasny / ciemny" onclick="toggleDark()">◐</button>
     </div>
   </header>
@@ -985,6 +1057,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
 /* ─── INIT ──────────────────────────────────────── */
 document.addEventListener('DOMContentLoaded', () => {
   StatusBar.init();
+  if (window.EgzeBundle) EgzeBundle.bindUi();
   Router.register('ognivo', OgnivoModule);
   Router.register('wro', WroModule);
   Router.register('arkusz', ArkuszModule);

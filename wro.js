@@ -106,6 +106,49 @@ const WroModule = (() => {
     if (srch) srch.addEventListener('input', e => renderList(e.target.value));
   }
 
+  function rebuildEntitiesFromBaza() {
+    entities = Object.keys(bazaDanych).map(id => {
+      const avail = Object.keys(bazaDanych[id]).filter(k => k !== '_meta' && bazaDanych[id][k].length > 1);
+      return { id, availableSources: avail, sourceCount: avail.length };
+    }).sort((a, b) => b.sourceCount - a.sourceCount || a.id.localeCompare(b.id));
+  }
+
+  function persistBazaDanych() {
+    try {
+      if (!bazaDanych || !Object.keys(bazaDanych).length) {
+        localStorage.removeItem('egze3_wro_database');
+        return;
+      }
+      localStorage.setItem('egze3_wro_database', JSON.stringify(bazaDanych));
+    } catch (e) {
+      console.warn('[WRO] persist baza failed (za duża?)', e);
+    }
+  }
+
+  function importBazaDanych(db, opts) {
+    opts = opts || {};
+    if (!db || typeof db !== 'object') return false;
+    bazaDanych = db;
+    window.WroDatabase = bazaDanych;
+    rebuildEntitiesFromBaza();
+    if (!opts.skipPersist) persistBazaDanych();
+    return true;
+  }
+
+  function tryLoadPersistedBaza() {
+    if (Object.keys(bazaDanych).length) return;
+    try {
+      const raw = localStorage.getItem('egze3_wro_database');
+      if (!raw) return;
+      const db = JSON.parse(raw);
+      if (db && typeof db === 'object' && Object.keys(db).length) {
+        importBazaDanych(db, { skipPersist: true });
+      }
+    } catch (e) {
+      console.warn('[WRO] load persisted baza failed', e);
+    }
+  }
+
   function handleFileLoad(e) {
     const file = e.target.files[0];
     if (!file) return;
@@ -117,10 +160,8 @@ const WroModule = (() => {
       try {
         bazaDanych = JSON.parse(text);
         window.WroDatabase = bazaDanych;
-        entities = Object.keys(bazaDanych).map(id => {
-          const avail = Object.keys(bazaDanych[id]).filter(k => k !== '_meta' && bazaDanych[id][k].length > 1);
-          return { id, availableSources: avail, sourceCount: avail.length };
-        }).sort((a, b) => b.sourceCount - a.sourceCount || a.id.localeCompare(b.id));
+        rebuildEntitiesFromBaza();
+        persistBazaDanych();
 
         renderList('');
         showContent('<div class="wro-empty-state"><div class="wro-empty-card"><div class="wro-empty-icon">✅</div><h3>Baza załadowana</h3><p>Załadowano ' + entities.length + ' podmiotów. Wybierz podmiot z listy.</p></div></div>');
@@ -531,6 +572,7 @@ const WroModule = (() => {
 
   function activate(params = {}) {
     if (!activated) { activated = true; }
+    tryLoadPersistedBaza();
     render();
 
     // Jeśli wywołano z Arkusza z konkretną osobą — aktywuj ją
@@ -618,7 +660,7 @@ const WroModule = (() => {
     toggleStatus, toggleCart, updateCartCounter,
     renderCart, clearCart, exportProgress, exportMatrixCSV,
     expandAll, collapseAll,
-    getCepikInfoForId, getBazaDanych
+    getCepikInfoForId, getBazaDanych, importBazaDanych
   };
 })();
 
