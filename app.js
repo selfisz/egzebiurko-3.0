@@ -93,10 +93,12 @@ const WorkspaceTabs = (() => {
 
   function open(id) {
     if (!LABELS[id]) return;
-    if (!tabs.includes(id)) tabs.push(id);
-    save();
-    render();
-    syncNavMarks();
+    if (!tabs.includes(id)) {
+      tabs.push(id);
+      save();
+      render();
+      syncNavMarks();
+    }
   }
 
   function close(id) {
@@ -252,8 +254,22 @@ const WorkspaceTabs = (() => {
     `).join('');
   }
 
-  function onNavigate(id) {
-    open(id);
+  function onNavigate(id, prevId) {
+    if (tabs.includes(id)) {
+      render();
+      syncNavMarks();
+      return;
+    }
+    if (!tabs.length) {
+      open(id);
+      return;
+    }
+    const idx = tabs.indexOf(prevId);
+    if (idx >= 0) tabs[idx] = id;
+    else tabs[tabs.length - 1] = id;
+    save();
+    render();
+    syncNavMarks();
   }
 
   function init() {
@@ -281,9 +297,11 @@ const Router = (() => {
 
   function navigate(id, params = {}) {
     if (current === id && Object.keys(params).length === 0) {
-      if (window.WorkspaceTabs) WorkspaceTabs.onNavigate(id);
+      if (window.WorkspaceTabs) WorkspaceTabs.onNavigate(id, current);
       return;
     }
+
+    const prev = current;
 
     // Hide all panels
     document.querySelectorAll('.module-panel').forEach(el => el.classList.add('hidden'));
@@ -300,16 +318,14 @@ const Router = (() => {
     current = id;
     pendingParams = params;
 
-    // Init module if first time
     if (modules[id]) {
       try { modules[id].activate(params); }
       catch (e) { console.error('[Router] activate error', id, e); }
     }
 
-    // Save last view
     try { localStorage.setItem('egze3_last_module', id); } catch {}
 
-    if (window.WorkspaceTabs) WorkspaceTabs.onNavigate(id);
+    if (window.WorkspaceTabs) WorkspaceTabs.onNavigate(id, prev);
   }
 
   function getCurrent() { return current; }

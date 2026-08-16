@@ -313,7 +313,7 @@ const ZobowiazaniModule = (() => {
         if (frame && frame.contentWindow) {
           frame.contentWindow.postMessage({ type: 'GET_DB' }, '*');
         }
-      }, 120);
+      }, 2000);
 
       setTimeout(() => {
         window.removeEventListener('message', handler);
@@ -390,7 +390,7 @@ const ZobowiazaniModule = (() => {
       } finally {
         _syncInFlight = false;
       }
-    }, 600);
+    }, 5000);
   }
 
   function bindArkuszSyncListeners() {
@@ -2065,8 +2065,14 @@ const ZobowiazaniModule = (() => {
 
   /* ─── API MODUŁU ──────────────────────────────────────── */
   async function activate(params = {}) {
-    activated = true;
     bindArkuszSyncListeners();
+    const container = document.getElementById('zobowiazani-app');
+    const alreadyLive = activated && dbSheet && container && container.querySelector('.zob-header');
+    activated = true;
+    if (alreadyLive) {
+      renderViews();
+      return;
+    }
     await render();
   }
 

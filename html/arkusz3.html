@@ -1127,9 +1127,10 @@ function tryRestoreAutosave(){
     const empty=App.sheets.length<=1 && sh && !sh.rows.length;
     if(!empty) return;
     const when=data.savedAt?(' z '+String(data.savedAt).replace('T',' ').slice(0,19)):'';
-    if(confirm('Znaleziono lokalny autosave'+when+'.\nPrzywrócić?')){
+    const embedded = window.parent && window.parent !== window;
+    if(embedded || confirm('Znaleziono lokalny autosave'+when+'.\nPrzywrócić?')){
       loadWorkbookData(data);
-      toast('Przywrócono autosave');
+      if(!embedded) toast('Przywrócono autosave');
     }
   }catch(_){}
 }

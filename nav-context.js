@@ -5,20 +5,10 @@
 'use strict';
 
 function handleNavClick(event, moduleId) {
-  if (event.ctrlKey || event.metaKey) {
-    // Ctrl+Click — zawsze otwórz w nowej karcie
+  if (event.ctrlKey || event.metaKey || event.shiftKey) {
     WorkspaceTabs.open(moduleId);
-    Router.navigate(moduleId);
-  } else {
-    // Zwykły klik — przełącz na istniejącą lub otwórz pierwszą kartę
-    const isOpen = WorkspaceTabs.isOpen(moduleId);
-    if (isOpen) {
-      Router.navigate(moduleId);
-    } else {
-      WorkspaceTabs.open(moduleId);
-      Router.navigate(moduleId);
-    }
   }
+  Router.navigate(moduleId);
 }
 
 function showNavMenu(event, moduleId) {
@@ -81,4 +71,11 @@ function getModuleLabel(moduleId) {
     zakladka4: 'Balanser'
   };
   return labels[moduleId] || moduleId;
+}
+
+// Dodaj toast helper jeśli nie istnieje
+if (typeof showToast !== 'function') {
+  window.showToast = function(msg, type = 'info') {
+    console.log(`[${type}] ${msg}`);
+  };
 }

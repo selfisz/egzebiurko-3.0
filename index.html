@@ -202,6 +202,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
   min-height:0;
   background:var(--bg);
   width:100%;
+  position:relative;
 }
 .workspace-tabs{
   display:flex;align-items:flex-end;gap:4px;
@@ -352,6 +353,13 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
   display:flex;flex-direction:column;
 }
 .module-panel.hidden{display:none!important}
+/* iframe Arkusza nie może dostać display:none — przeglądarka go wtedy przeładowuje i pyta o autosave */
+#panel-arkusz.hidden{
+  display:flex!important;
+  position:absolute; inset:0;
+  visibility:hidden; pointer-events:none;
+  z-index:-1; width:auto; height:auto;
+}
 .empty-tab-placeholder{
   flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;
   gap:8px;color:var(--muted);user-select:none;
@@ -1280,7 +1288,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
   <!-- ═══ NAV ═════════════════════════════════════ -->
   <nav class="nav">
     <div class="nav-section">Główne</div>
-    <button class="nav-btn active" data-module="arkusz" onclick="Router.navigate('arkusz')">
+    <button class="nav-btn active" data-module="arkusz" onclick="handleNavClick(event, 'arkusz')" oncontextmenu="showNavMenu(event, 'arkusz')">
       <span class="nav-icon">📋</span>
       <span class="nav-label">Arkusz</span>
       <span class="nav-badge" id="nav-badge-arkusz" style="display:none"></span>

@@ -257,11 +257,6 @@ const ArkuszModule = (() => {
   function activate(params = {}) {
     activated = true;
     ensureIframe();
-    // Reload iframe to sync any LocalStorage changes made in Zobowiazani module
-    const frame = document.getElementById('arkusz-frame');
-    if (frame && frame.contentWindow) {
-      frame.contentWindow.location.reload();
-    }
     refreshIntBar();
   }
 
