@@ -1,10 +1,12 @@
 # egzebiurko-3.0
 
-Aplikacja lokalna do pracy ze sprawami: **Arkusz**, **Baza zobowiązanych**, **OGNIVO**, **Analityka WRO**.
+Aplikacja **w 100% lokalna / offline**: **Arkusz**, **Szafka teczek**, **OGNIVO**, **Analityka WRO**, narzędzia.
 
 - bez instalacji Node / npm
-- bez serwera produkcyjnego i bazy SQL
-- dane spraw wczytujesz z własnych plików na dysku
+- bez serwera w chmurze i bazy SQL
+- **bez połączeń z internetem** (CSP: `connect-src 'none'`, brak CDN)
+- dane spraw tylko z plików, które sam wczytasz; świeża instalacja = **pusto**
+- stan zostaje w `localStorage` **tej** przeglądarki na tym komputerze
 
 ## Struktura
 
@@ -16,6 +18,7 @@ egzebiurko-3.0/
 ├── ognivo.js
 ├── wro.js
 ├── zobowiazani.js
+├── akumulator.js / rozliczenia.js / przelew.js / balanser.js
 ├── html/arkusz3.html  ← Arkusz
 ├── scripts/serve.py
 └── README.md
@@ -40,6 +43,8 @@ python -m http.server 8080
 
 5. Otwórz: **http://127.0.0.1:8080/**
 
+Lokalny `serve.py` / `http.server` tylko serwuje pliki z dysku — **nic nie wysyła do sieci**.
+
 ### Gdy Python jest zablokowany
 
 Otwórz `index.html` dwuklikiem. Potem:
@@ -61,6 +66,13 @@ Otwórz `index.html` dwuklikiem. Potem:
 | Arkusz | `html/arkusz3.html` (w paczce ZIP) |
 
 **Karty narzędzi:** LPM w menu po lewej otwiera kartę u góry; **PPM** — otwórz / zamknij / zamknij inne (jak w przeglądarce). Stan formularzy zostaje przy przełączaniu.
+
+## Offline / prywatność
+
+- Brak Google Fonts, analytics, API, telemetrii.
+- Arkusz ma osobne CSP (`connect-src 'none'`).
+- Shell (`index.html`) też blokuje `connect-src` i zewnętrzne fonty.
+- Dane nie wychodzą z przeglądarki, dopóki sam nie użyjesz **Zapisz** / **Zapisz wszystko** (plik na dysk).
 
 ## Uwagi
 

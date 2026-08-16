@@ -1508,10 +1508,34 @@ const ZobowiazaniModule = (() => {
     let bodyHtml = '';
 
     if (detailTab === 'dane') {
+      const idExtras = [
+        info.regon ? `<div class="zob-id-row"><span class="zob-id-label">REGON</span><span class="zob-badge-mono" onclick="ZobowiazaniModule.copy('${info.regon}', this)">${info.regon}</span></div>` : '',
+        info.adresStr ? `<div class="zob-id-row"><span class="zob-id-label">Adres</span><span class="zob-kv-val" onclick="ZobowiazaniModule.copy('${escapeHtml(info.adresStr).replace(/'/g, "\\'")}', this)">${escapeHtml(info.adresStr)}</span></div>` : '',
+        (info.sygnatura || info.kwota) ? `<div class="zob-id-row"><span class="zob-id-label">Sprawa</span><span class="zob-kv-val">${escapeHtml([info.sygnatura, info.kwota].filter(Boolean).join(' · '))}</span></div>` : '',
+      ].filter(Boolean).join('');
+
+      const skipCols = new Set([...REG_SYSTEMS, 'Stan', 'Komplet', DEFER_COL]);
+      const otherFields = dbSheet.columns.map((colName, cIdx) => {
+        if (skipCols.has(colName)) return '';
+        if (/^(pesel|nip|regon)$/i.test(String(colName).trim())) return '';
+        if (/adres|ulica|miasto|kod\s*poczt/i.test(String(colName)) && info.adresStr) return '';
+        if (/sygn|kwota/i.test(String(colName)) && (info.sygnatura || info.kwota)) return '';
+        const rawVal = String(r[cIdx] || '').trim();
+        if (!rawVal) return '';
+        // Skip if identical to header PESEL/NIP
+        if (info.pesel && rawVal === info.pesel) return '';
+        if (info.nip && rawVal === info.nip) return '';
+        const isLong = rawVal.length > 25;
+        return `<div class="zob-kv-item ${isLong ? 'full' : ''}">
+          <div class="zob-kv-label">${escapeHtml(colName)}</div>
+          <div class="zob-kv-val" onclick="ZobowiazaniModule.copy('${escapeHtml(rawVal).replace(/'/g, "\\'")}', this)">${escapeHtml(rawVal)}</div>
+        </div>`;
+      }).join('');
+
       bodyHtml = `
         ${deferBanner}
-        <div class="zob-sheet">
-          <div class="zob-sheet-title"><span>Odłóż / przypomnienie</span></div>
+        <div class="zob-section">
+          <div class="zob-section-title"><span>Odłóż / przypomnienie</span></div>
           <div class="zob-defer-actions">
             <button type="button" class="zob-action-btn" onclick="ZobowiazaniModule.deferDays(${selectedRowIndex}, 1)">+1 dzień</button>
             <button type="button" class="zob-action-btn" onclick="ZobowiazaniModule.deferDays(${selectedRowIndex}, 3)">+3 dni</button>
@@ -1519,36 +1543,21 @@ const ZobowiazaniModule = (() => {
             <button type="button" class="zob-action-btn primary" onclick="ZobowiazaniModule.deferPick(${selectedRowIndex})">Wybierz datę</button>
             ${defer ? `<button type="button" class="zob-action-btn" onclick="ZobowiazaniModule.clearDefer(${selectedRowIndex})">Wyczyść</button>` : ''}
           </div>
-          <p class="zob-mod-sub" style="margin:0">Zapisuje się w kolumnie <strong>Wróć</strong> w bazie Arkusza — widać też na liście i w filtrach.</p>
+          <p class="zob-defer-note">Kolumna <strong>Wróć</strong> w Arkuszu — widać też na liście i w filtrach.</p>
         </div>
-        <div class="zob-sheet">
-          <div class="zob-sheet-title"><span>Dane identyfikacyjne</span><span>Kliknij, by skopiować</span></div>
-          ${info.pesel ? `<div class="zob-id-row"><span class="zob-id-label">PESEL</span><span class="zob-badge-mono" onclick="ZobowiazaniModule.copy('${info.pesel}', this)">${info.pesel}</span></div>` : ''}
-          ${info.nip ? `<div class="zob-id-row"><span class="zob-id-label">NIP</span><span class="zob-badge-mono" onclick="ZobowiazaniModule.copy('${info.nip}', this)">${info.nip}</span></div>` : ''}
-          ${info.regon ? `<div class="zob-id-row"><span class="zob-id-label">REGON</span><span class="zob-badge-mono" onclick="ZobowiazaniModule.copy('${info.regon}', this)">${info.regon}</span></div>` : ''}
-          ${info.adresStr ? `<div class="zob-id-row"><span class="zob-id-label">Adres</span><span class="zob-kv-val" onclick="ZobowiazaniModule.copy('${escapeHtml(info.adresStr).replace(/'/g, "\\'")}', this)">${escapeHtml(info.adresStr)}</span></div>` : ''}
-          ${(info.sygnatura || info.kwota) ? `<div class="zob-id-row"><span class="zob-id-label">Sprawa</span><span class="zob-kv-val">${escapeHtml([info.sygnatura, info.kwota].filter(Boolean).join(' · '))}</span></div>` : ''}
-        </div>
-        <div class="zob-sheet">
-          <div class="zob-sheet-title"><span>Pozostałe pola z Arkusza</span></div>
-          <div class="zob-kv-grid">
-            ${dbSheet.columns.map((colName, cIdx) => {
-              if (REG_SYSTEMS.includes(colName) || colName === 'Stan' || colName === 'Komplet' || colName === DEFER_COL) return '';
-              const rawVal = String(r[cIdx] || '').trim();
-              if (!rawVal) return '';
-              const isLong = rawVal.length > 25;
-              return `<div class="zob-kv-item ${isLong ? 'full' : ''}">
-                <div class="zob-kv-label">${escapeHtml(colName)}</div>
-                <div class="zob-kv-val" onclick="ZobowiazaniModule.copy('${escapeHtml(rawVal).replace(/'/g, "\\'")}', this)">${escapeHtml(rawVal)}</div>
-              </div>`;
-            }).join('')}
-          </div>
-        </div>
+        ${idExtras ? `<div class="zob-section">
+          <div class="zob-section-title"><span>Adres i sprawa</span><span class="zob-section-hint">Kliknij, by skopiować</span></div>
+          ${idExtras}
+        </div>` : ''}
+        ${otherFields ? `<div class="zob-section">
+          <div class="zob-section-title"><span>Pozostałe pola</span></div>
+          <div class="zob-kv-grid">${otherFields}</div>
+        </div>` : ''}
       `;
     } else if (detailTab === 'systemy') {
       bodyHtml = `
-        <div class="zob-sheet">
-          <div class="zob-sheet-title">
+        <div class="zob-section">
+          <div class="zob-section-title">
             <span>Czynności systemowe</span>
             <span style="color:${sysCount === 5 ? 'var(--zob-olive)' : 'var(--zob-spine)'}">${sysCount} z 5</span>
           </div>
@@ -1609,6 +1618,10 @@ const ZobowiazaniModule = (() => {
       <div class="zob-open-header" data-anim="${animKey}">
         <div class="zob-open-header-main">
           <div class="zob-open-title">${escapeHtml(info.name)}</div>
+          ${(info.pesel || info.nip) ? `<div class="zob-open-ids">
+            ${info.pesel ? `<button type="button" class="zob-id-chip" title="Kopiuj PESEL" onclick="ZobowiazaniModule.copy('${info.pesel}', this)"><span class="lbl">PESEL</span>${info.pesel}</button>` : ''}
+            ${info.nip ? `<button type="button" class="zob-id-chip" title="Kopiuj NIP" onclick="ZobowiazaniModule.copy('${info.nip}', this)"><span class="lbl">NIP</span>${info.nip}</button>` : ''}
+          </div>` : ''}
           <div class="zob-open-sub">Teczka #${selectedRowIndex + 1} · <span class="zob-status-chip ${st.cls}">${st.label}</span> · ${sysCount}/5 systemów${defer ? ` · <span class="zob-defer-chip ${defer.due ? 'due' : 'wait'}">${defer.due ? 'Do powrotu' : 'Na później'} ${escapeHtml(defer.raw)}</span>` : ''}</div>
         </div>
         <div class="zob-open-header-actions">
