@@ -1279,7 +1279,8 @@ const ZobowiazaniModule = (() => {
     }
     el.innerHTML = openTabs.map(t => `
       <button type="button" class="zob-btab ${t.key === activeTabKey ? 'active' : ''}" title="${escapeHtml(t.name)}"
-        onclick="ZobowiazaniModule.activateTab(decodeURIComponent('${encodeURIComponent(t.key)}'))">
+        onclick="ZobowiazaniModule.activateTab(decodeURIComponent('${encodeURIComponent(t.key)}'))"
+        oncontextmenu="ZobowiazaniModule.openTabMenu(event, decodeURIComponent('${encodeURIComponent(t.key)}'))">
         <span class="zob-btab-label">${escapeHtml(t.name)}</span>
         <span class="zob-btab-x" onclick="event.stopPropagation();ZobowiazaniModule.closeTab(decodeURIComponent('${encodeURIComponent(t.key)}'))" title="Zamknij">×</span>
       </button>
@@ -1396,7 +1397,9 @@ const ZobowiazaniModule = (() => {
         : '';
 
       body += `
-        <tr class="${isSelected ? 'is-selected' : ''}${pinned ? ' is-pinned' : ''}" onclick="ZobowiazaniModule.select(${ri})">
+        <tr class="${isSelected ? 'is-selected' : ''}${pinned ? ' is-pinned' : ''}" data-ri="${ri}"
+          onclick="ZobowiazaniModule.select(${ri})"
+          oncontextmenu="ZobowiazaniModule.openRowMenu(event, ${ri})">
           <td style="width:36px;color:var(--zob-ink-soft);font-size:.72rem">${displayIdx + 1}</td>
           <td>
             <div class="zob-reg-name" title="${escapeHtml(info.name)}">${escapeHtml(info.name)}</div>
@@ -1604,13 +1607,7 @@ const ZobowiazaniModule = (() => {
 
     detailContent.innerHTML = `
       <div class="zob-open-header" data-anim="${animKey}">
-        <div class="zob-win-controls">
-          <button type="button" class="zob-win-btn" onclick="ZobowiazaniModule.closeActiveTab()" title="Zamknij teczkę">×</button>
-          <button type="button" class="zob-win-btn" onclick="ZobowiazaniModule.minimizeFolder()" title="Minimalizuj (zostaw kartę)">−</button>
-          <button type="button" class="zob-win-btn" onclick="ZobowiazaniModule.toggleFocus()" title="${viewMode === 'focus' ? 'Przywróć listę' : 'Pełny ekran'}">${viewMode === 'focus' ? '⧉' : '⛶'}</button>
-          <button type="button" class="zob-win-btn archive" onclick="ZobowiazaniModule.archivePerson(${selectedRowIndex})" title="Archiwizuj">${isArchived(pkey) ? 'Przywróć' : 'Archiwizuj'}</button>
-        </div>
-        <div>
+        <div class="zob-open-header-main">
           <div class="zob-open-title">${escapeHtml(info.name)}</div>
           <div class="zob-open-sub">Teczka #${selectedRowIndex + 1} · <span class="zob-status-chip ${st.cls}">${st.label}</span> · ${sysCount}/5 systemów${defer ? ` · <span class="zob-defer-chip ${defer.due ? 'due' : 'wait'}">${defer.due ? 'Do powrotu' : 'Na później'} ${escapeHtml(defer.raw)}</span>` : ''}</div>
         </div>
@@ -1618,6 +1615,12 @@ const ZobowiazaniModule = (() => {
           <button type="button" class="zob-pin-btn ${isPinned(pkey) ? 'on' : ''}" onclick="ZobowiazaniModule.togglePin(decodeURIComponent('${encodeURIComponent(pkey)}'))" title="Biurko">${isPinned(pkey) ? '📌 Biurko' : '📍 Biurko'}</button>
           <button type="button" class="zob-action-btn" onclick="ZobowiazaniModule.deferDays(${selectedRowIndex}, 3)" title="Odłóż o 3 dni">Odłóż +3</button>
           <button class="zob-btn-komplet" onclick="ZobowiazaniModule.setAll(${selectedRowIndex})" title="Oznacz komplet">Komplet</button>
+          <div class="zob-win-controls">
+            <button type="button" class="zob-win-btn archive" onclick="ZobowiazaniModule.archivePerson(${selectedRowIndex})" title="${isArchived(pkey) ? 'Przywróć z archiwum' : 'Archiwizuj'}">${isArchived(pkey) ? 'Przywróć' : 'Archiwizuj'}</button>
+            <button type="button" class="zob-win-btn" onclick="ZobowiazaniModule.minimizeFolder()" title="Minimalizuj (zostaw kartę)">−</button>
+            <button type="button" class="zob-win-btn" onclick="ZobowiazaniModule.toggleFocus()" title="${viewMode === 'focus' ? 'Pokaż listę obok' : 'Ukryj listę (teczka na środku)'}">${viewMode === 'focus' ? '⧉' : '⛶'}</button>
+            <button type="button" class="zob-win-btn close" onclick="ZobowiazaniModule.closeActiveTab()" title="Zamknij teczkę">×</button>
+          </div>
         </div>
       </div>
       <div class="zob-open-tabs">
@@ -1629,9 +1632,8 @@ const ZobowiazaniModule = (() => {
       </div>
       <div class="zob-open-footer">
         <button class="zob-nav-btn" onclick="ZobowiazaniModule.prevPerson()" title="Poprzednia teczka">← Poprzedni</button>
-        <span class="zob-mod-sub">${curVisIdx >= 0 ? `${curVisIdx + 1} / ${visibleRows.length}` : ''}</span>
+        <span class="zob-foot-count">${curVisIdx >= 0 ? `${curVisIdx + 1} / ${visibleRows.length}` : ''}</span>
         <button class="zob-nav-btn" onclick="ZobowiazaniModule.nextPerson()" title="Następna teczka">Następny →</button>
-        <button class="zob-nav-btn accent" onclick="ZobowiazaniModule.nextTodo()" title="Następna niekompletna">Do zrobienia</button>
       </div>
     `;
 
@@ -1641,6 +1643,11 @@ const ZobowiazaniModule = (() => {
         saveNote(selectedRowIndex, noteInput.value);
       });
     }
+
+    detailContent.oncontextmenu = (e) => {
+      if (e.target.closest('textarea, input, button, a')) return;
+      openRowMenu(e, selectedRowIndex);
+    };
 
     // Restart tab animation
     const body = detailContent.querySelector('.zob-open-body');
@@ -1715,6 +1722,134 @@ const ZobowiazaniModule = (() => {
     viewMode = 'list';
     persistOpenTabs();
     renderViews();
+  }
+
+  function hideCtxMenu() {
+    const m = document.getElementById('zob-ctx-menu');
+    if (m) m.classList.remove('open');
+  }
+
+  function ensureCtxMenu() {
+    let m = document.getElementById('zob-ctx-menu');
+    if (m) return m;
+    m = document.createElement('div');
+    m.id = 'zob-ctx-menu';
+    m.className = 'zob-ctx';
+    m.setAttribute('role', 'menu');
+    document.body.appendChild(m);
+    if (!hideCtxMenu._bound) {
+      document.addEventListener('click', hideCtxMenu);
+      document.addEventListener('scroll', hideCtxMenu, true);
+      window.addEventListener('resize', hideCtxMenu);
+      document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hideCtxMenu(); });
+      hideCtxMenu._bound = true;
+    }
+    return m;
+  }
+
+  function placeCtxMenu(menu, e) {
+    menu.classList.add('open');
+    const pad = 8;
+    const w = menu.offsetWidth || 220;
+    const h = menu.offsetHeight || 200;
+    let x = e.clientX;
+    let y = e.clientY;
+    if (x + w > window.innerWidth - pad) x = window.innerWidth - w - pad;
+    if (y + h > window.innerHeight - pad) y = window.innerHeight - h - pad;
+    menu.style.left = Math.max(pad, x) + 'px';
+    menu.style.top = Math.max(pad, y) + 'px';
+  }
+
+  function buildCtxItems(menu, title, items) {
+    menu.innerHTML = '';
+    const h = document.createElement('div');
+    h.className = 'zob-ctx-h';
+    h.textContent = title;
+    menu.appendChild(h);
+    items.forEach(it => {
+      if (it === 'sep') {
+        const sep = document.createElement('div');
+        sep.className = 'zob-ctx-sep';
+        menu.appendChild(sep);
+        return;
+      }
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = it.label;
+      if (it.danger) b.classList.add('danger');
+      b.onclick = () => {
+        hideCtxMenu();
+        try { it.action(); } catch (err) { console.error(err); }
+      };
+      menu.appendChild(b);
+    });
+  }
+
+  function openRowMenu(e, ri) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!dbSheet || !dbSheet.rows[ri]) return;
+    const info = extractPersonInfo(dbSheet.rows[ri]);
+    const key = personKeyFromInfo(info);
+    const pinned = isPinned(key);
+    const archived = isArchived(key);
+    const tabOpen = openTabs.some(t => t.key === key);
+    const menu = ensureCtxMenu();
+    const items = [
+      { label: 'Otwórz teczkę', action: () => selectRow(ri) },
+      'sep',
+      { label: pinned ? 'Zdejmij z Biurka' : 'Przypnij do Biurka', action: () => togglePin(key) },
+      { label: 'Odłóż +3 dni', action: () => deferByDays(ri, 3) },
+      { label: archived ? 'Przywróć z Archiwum' : 'Archiwizuj', action: () => archivePerson(ri), danger: !archived },
+      'sep',
+    ];
+    if (info.pesel) items.push({ label: 'Kopiuj PESEL', action: () => copyToClipboard(info.pesel) });
+    if (info.nip) items.push({ label: 'Kopiuj NIP', action: () => copyToClipboard(info.nip) });
+    if (info.name) items.push({ label: 'Kopiuj nazwisko', action: () => copyToClipboard(info.name) });
+    if (tabOpen) {
+      items.push('sep');
+      items.push({ label: 'Zamknij kartę', action: () => closeTab(key) });
+    }
+    buildCtxItems(menu, info.name || 'Teczka', items);
+    placeCtxMenu(menu, e);
+  }
+
+  function openTabMenu(e, key) {
+    e.preventDefault();
+    e.stopPropagation();
+    const t = openTabs.find(x => x.key === key);
+    if (!t) return;
+    const menu = ensureCtxMenu();
+    const items = [
+      { label: 'Aktywuj', action: () => activateTab(key) },
+      { label: 'Zamknij kartę', action: () => closeTab(key) },
+      { label: 'Zamknij inne karty', action: () => {
+        openTabs = openTabs.filter(x => x.key === key);
+        activeTabKey = key;
+        selectedRowIndex = t.rowIndex;
+        if (viewMode === 'list') viewMode = 'split';
+        persistOpenTabs();
+        renderViews();
+      }},
+      { label: 'Zamknij wszystkie', action: () => {
+        openTabs = [];
+        activeTabKey = '';
+        viewMode = 'list';
+        persistOpenTabs();
+        renderViews();
+      }},
+      'sep',
+      { label: 'Minimalizuj (lista)', action: () => { activateTab(key); minimizeFolder(); } },
+    ];
+    if (dbSheet && dbSheet.rows[t.rowIndex]) {
+      const info = extractPersonInfo(dbSheet.rows[t.rowIndex]);
+      const pkey = personKeyFromInfo(info);
+      items.push('sep');
+      items.push({ label: isPinned(pkey) ? 'Zdejmij z Biurka' : 'Przypnij do Biurka', action: () => togglePin(pkey) });
+      items.push({ label: isArchived(pkey) ? 'Przywróć z Archiwum' : 'Archiwizuj', action: () => archivePerson(t.rowIndex), danger: !isArchived(pkey) });
+    }
+    buildCtxItems(menu, t.name || 'Karta', items);
+    placeCtxMenu(menu, e);
   }
 
   function toggleFocus() {
@@ -1905,6 +2040,8 @@ const ZobowiazaniModule = (() => {
     togglePin,
     archivePerson,
     applyArchiveIds,
+    openRowMenu,
+    openTabMenu,
     syncCepik: syncCepikForPerson,
     syncAllCepik: syncAllCepikFromWro,
     copyCleanExcel: copyCleanExcelText,
