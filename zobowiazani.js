@@ -1,7 +1,7 @@
 /* ============================================================
-   Egzebiurko 3.0 — modules/zobowiazani.js
-   Hybrydowy panel: Smart Tabela + Master-Detail + Szybkie Filtry
-   Pełna synchronizacja CEPIK / UFG z modułem Analityka WRO
+   Egzebiurko 3.0 — zobowiazani.js
+   Szafka teczek: lista osób + otwarta teczka (Dane / Systemy / CEPIK / Notatka)
+   Synchronizacja CEPIK / UFG z modułem Analityka WRO
    ============================================================ */
 
 'use strict';
@@ -10,11 +10,13 @@ const ZobowiazaniModule = (() => {
 
   const AUTOSAVE_KEY = 'ots_autosave_v1';
   const REG_SYSTEMS = ['KAWA', 'SINF', 'UFG', 'JPK', 'INFZ'];
+  const FILE_SOURCE_KEY = 'egze3_zob_file_source';
 
   let activated = false;
   let dbData = null;
   let dbSheet = null;
   let dbSheetIndex = -1;
+  let dataSourceLabel = ''; // 'Arkusz' | 'localStorage' | nazwa pliku
   
   // Stan filtrów i widoku
   let filterText = '';
@@ -23,18 +25,162 @@ const ZobowiazaniModule = (() => {
   let sortDir = 1;
   let selectedRowIndex = 0;
   let detailOpen = true;
+  let detailTab = 'dane'; // 'dane' | 'systemy' | 'cepik' | 'notatka'
   let dbErrorMsg = '';
+  let folderAnimToken = 0;
 
-  /* ─── SYNCHRONIZACJA Z ARKUSZEM ────────────────────────── */
+  /* ─── NORMALIZACJA / WYBÓR ARKUSZA ─────────────────────── */
+  function normalizeToDbData(parsed) {
+    if (!parsed) throw new Error('Pusty plik');
+
+    if (typeof parsed === 'string') {
+      parsed = JSON.parse(parsed);
+    }
+
+    if (parsed && Array.isArray(parsed.sheets)) {
+      return parsed;
+    }
+
+    if (parsed && Array.isArray(parsed.columns) && Array.isArray(parsed.rows)) {
+      return {
+        sheets: [{
+          name: parsed.name || 'Zobowiązani',
+          columns: parsed.columns,
+          rows: parsed.rows,
+          widths: parsed.widths,
+          visible: parsed.visible,
+          order: parsed.order,
+        }],
+        savedAt: new Date().toISOString(),
+      };
+    }
+
+    if (Array.isArray(parsed) && parsed.length) {
+      if (typeof parsed[0] === 'object' && !Array.isArray(parsed[0])) {
+        const columns = Array.from(parsed.reduce((set, row) => {
+          Object.keys(row || {}).forEach(k => set.add(k));
+          return set;
+        }, new Set()));
+        const rows = parsed.map(obj => columns.map(c => (obj && obj[c] != null ? obj[c] : '')));
+        return {
+          sheets: [{ name: 'Zobowiązani', columns, rows }],
+          savedAt: new Date().toISOString(),
+        };
+      }
+      if (Array.isArray(parsed[0])) {
+        const columns = parsed[0].map(c => String(c ?? ''));
+        const rows = parsed.slice(1).map(r => {
+          const row = Array.isArray(r) ? r.slice() : [];
+          while (row.length < columns.length) row.push('');
+          return row;
+        });
+        return {
+          sheets: [{ name: 'Zobowiązani', columns, rows }],
+          savedAt: new Date().toISOString(),
+        };
+      }
+    }
+
+    throw new Error('Nieznany format JSON (oczekiwano sheets[] / columns+rows / tablicy obiektów)');
+  }
+
+  function parseLooseJsonText(text) {
+    let t = String(text || '').trim();
+    if (!t) throw new Error('Plik jest pusty');
+
+    // Pliki .js typu: const baza = {...};  lub  module.exports = {...}
+    if (t.charAt(0) !== '{' && t.charAt(0) !== '[') {
+      const assign = t.match(/=\s*([\[{][\s\S]*)$/);
+      if (assign) t = assign[1].replace(/;?\s*$/, '');
+      else {
+        const firstBrace = t.search(/[\[{]/);
+        if (firstBrace >= 0) t = t.slice(firstBrace).replace(/;?\s*$/, '');
+      }
+    }
+
+    return JSON.parse(t);
+  }
+
+  function selectBestSheet(data) {
+    if (!data || !Array.isArray(data.sheets) || !data.sheets.length) return false;
+
+    let bestIndex = -1;
+    let maxRows = -1;
+
+    data.sheets.forEach((s, idx) => {
+      const name = s.name || '';
+      const isMatch = (name.toLowerCase() === 'zobowiązani' ||
+                       name.toLowerCase() === 'rejestr' ||
+                       name.toLowerCase().includes('zobowiązani') ||
+                       (s.columns && s.columns.some(c => /pesel/i.test(c) || /nip/i.test(c))));
+
+      if (isMatch) {
+        const rowCount = (s.rows || []).length;
+        if (rowCount > maxRows) {
+          maxRows = rowCount;
+          bestIndex = idx;
+        }
+      }
+    });
+
+    if (bestIndex < 0) {
+      data.sheets.forEach((s, idx) => {
+        const rowCount = (s.rows || []).length;
+        if (rowCount > maxRows) {
+          maxRows = rowCount;
+          bestIndex = idx;
+        }
+      });
+    }
+
+    if (bestIndex < 0) return false;
+
+    dbData = data;
+    dbSheetIndex = bestIndex;
+    dbSheet = dbData.sheets[dbSheetIndex];
+    if (!Array.isArray(dbSheet.rows)) dbSheet.rows = [];
+    if (!Array.isArray(dbSheet.columns)) dbSheet.columns = [];
+    ensureSystemColumns(dbSheet);
+    return true;
+  }
+
+  function persistLocal() {
+    if (!dbData) return;
+    try {
+      dbData.savedAt = new Date().toISOString();
+      localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(dbData));
+    } catch (e) {
+      console.warn('[ZobowiazaniModule] localStorage save failed:', e);
+    }
+  }
+
+  /* ─── SYNCHRONIZACJA Z ARKUSZEM / PLIKIEM ──────────────── */
   async function loadDataAsync() {
+    dbErrorMsg = '';
+
+    // 1) Lokalna kopia (po wcześniejszym wczytaniu JSON / Arkusza)
+    try {
+      const raw = localStorage.getItem(AUTOSAVE_KEY);
+      if (raw) {
+        const parsed = normalizeToDbData(JSON.parse(raw));
+        if (selectBestSheet(parsed)) {
+          dataSourceLabel = localStorage.getItem(FILE_SOURCE_KEY) || 'localStorage';
+          return true;
+        }
+      }
+    } catch (e) {
+      console.warn('[ZobowiazaniModule] localStorage read failed:', e);
+    }
+
+    // 2) Arkusz (iframe)
     try {
       if (typeof ArkuszModule !== 'undefined') {
         ArkuszModule.ensureIframe();
       }
-      
+
       const frame = document.getElementById('arkusz-frame');
       if (!frame || !frame.contentWindow) {
-        throw new Error("Iframe arkusz-frame nie istnieje lub brak dostępu.");
+        throw new Error('Iframe arkusz-frame nie istnieje lub brak dostępu.');
       }
 
       const raw = await new Promise((resolve, reject) => {
@@ -47,7 +193,7 @@ const ZobowiazaniModule = (() => {
           }
         };
         window.addEventListener('message', handler);
-        
+
         intervalId = setInterval(() => {
           if (frame && frame.contentWindow) {
             frame.contentWindow.postMessage({ type: 'GET_DB' }, '*');
@@ -57,55 +203,86 @@ const ZobowiazaniModule = (() => {
         setTimeout(() => {
           window.removeEventListener('message', handler);
           clearInterval(intervalId);
-          reject(new Error("Brak odpowiedzi od Arkusza (timeout)."));
+          reject(new Error('Brak odpowiedzi od Arkusza (timeout).'));
         }, 2000);
       });
 
-      if (!raw) return false;
-      dbData = JSON.parse(raw);
-      if (!dbData || !Array.isArray(dbData.sheets)) return false;
-
-      let bestIndex = -1;
-      let maxRows = -1;
-
-      dbData.sheets.forEach((s, idx) => {
-        const name = s.name || '';
-        const isMatch = (name.toLowerCase() === 'zobowiązani' || 
-                         name.toLowerCase() === 'rejestr' || 
-                         name.toLowerCase().includes('zobowiązani') ||
-                         (s.columns && s.columns.some(c => /pesel/i.test(c) || /nip/i.test(c))));
-        
-        if (isMatch) {
-          const rowCount = (s.rows || []).length;
-          if (rowCount > maxRows) {
-            maxRows = rowCount;
-            bestIndex = idx;
-          }
-        }
-      });
-
-      if (bestIndex < 0 && dbData.sheets.length > 0) {
-        dbData.sheets.forEach((s, idx) => {
-          const rowCount = (s.rows || []).length;
-          if (rowCount > maxRows) {
-            maxRows = rowCount;
-            bestIndex = idx;
-          }
-        });
-      }
-
-      if (bestIndex >= 0) {
-        dbSheetIndex = bestIndex;
-        dbSheet = dbData.sheets[dbSheetIndex];
-        ensureSystemColumns(dbSheet);
+      if (!raw) throw new Error('Pusta odpowiedź z Arkusza');
+      const parsed = normalizeToDbData(typeof raw === 'string' ? JSON.parse(raw) : raw);
+      if (selectBestSheet(parsed)) {
+        dataSourceLabel = 'Arkusz';
+        persistLocal();
         return true;
       }
-      return false;
+      throw new Error('Arkusz nie zawiera arkusza z danymi');
     } catch (e) {
       console.error('[ZobowiazaniModule] Błąd wczytywania:', e);
       dbErrorMsg = e.toString();
       return false;
     }
+  }
+
+  function loadFromFile(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error('Nie udało się odczytać pliku'));
+      reader.onload = () => {
+        try {
+          const parsed = normalizeToDbData(parseLooseJsonText(reader.result));
+          if (!selectBestSheet(parsed)) {
+            reject(new Error('Plik nie zawiera żadnego arkusza / wierszy'));
+            return;
+          }
+          dataSourceLabel = file.name || 'plik JSON';
+          try { localStorage.setItem(FILE_SOURCE_KEY, dataSourceLabel); } catch {}
+          persistLocal();
+
+          // Spróbuj też odesłać do Arkusza, jeśli jest otwarty
+          try {
+            const frame = document.getElementById('arkusz-frame');
+            if (frame && frame.contentWindow) {
+              frame.contentWindow.postMessage({ type: 'SET_DB', payload: JSON.stringify(dbData) }, '*');
+            }
+          } catch {}
+
+          resolve(true);
+        } catch (err) {
+          reject(err);
+        }
+      };
+      reader.readAsText(file, 'UTF-8');
+    });
+  }
+
+  function triggerFilePicker() {
+    let input = document.getElementById('zob-json-input');
+    if (!input) {
+      input = document.createElement('input');
+      input.type = 'file';
+      input.id = 'zob-json-input';
+      input.accept = '.json,.js,.txt,application/json,text/plain';
+      input.style.display = 'none';
+      input.addEventListener('change', async () => {
+        const file = input.files && input.files[0];
+        input.value = '';
+        if (!file) return;
+        try {
+          await loadFromFile(file);
+          selectedRowIndex = 0;
+          if (typeof showToast === 'function') {
+            showToast(`Wczytano bazę: ${file.name} (${dbSheet.rows.length} wierszy)`, 'success', 3200);
+          }
+          await render();
+        } catch (err) {
+          console.error(err);
+          if (typeof showToast === 'function') {
+            showToast(`Błąd JSON: ${err.message || err}`, 'error', 4500);
+          }
+        }
+      });
+      document.body.appendChild(input);
+    }
+    input.click();
   }
 
   function ensureSystemColumns(sheet) {
@@ -132,6 +309,7 @@ const ZobowiazaniModule = (() => {
     if (!dbData || !dbSheet) return;
     try {
       dbData.savedAt = new Date().toISOString();
+      persistLocal();
       const frame = document.getElementById('arkusz-frame');
       if (frame && frame.contentWindow) {
         frame.contentWindow.postMessage({ type: 'SET_DB', payload: JSON.stringify(dbData) }, '*');
@@ -573,7 +751,7 @@ const ZobowiazaniModule = (() => {
     if (!container) return;
 
     try {
-      container.innerHTML = `<div style="padding:40px;text-align:center;color:var(--muted);">Ładowanie bazy z Arkusza...</div>`;
+      container.innerHTML = `<div class="zob-wrap"><div class="zob-mod-sub" style="padding:40px;text-align:center">Ładowanie teczek z Arkusza...</div></div>`;
 
       const hasData = await loadDataAsync();
 
@@ -581,13 +759,20 @@ const ZobowiazaniModule = (() => {
         container.innerHTML = `
           <div class="zob-wrap">
             <div class="zob-header">
-              <div>
-                <h2 class="mod-title">📇 Baza Zobowiązanych</h2>
-                <p class="mod-sub">Nie znaleziono bazy w pamięci Arkusza.</p>
+              <div class="zob-title-area">
+                <h2 class="zob-mod-title">Szafka teczek</h2>
+                <p class="zob-mod-sub">Brak bazy — wczytaj plik JSON albo otwórz Arkusz z danymi.</p>
               </div>
             </div>
-            <div style="background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:20px; color:var(--danger)">
-              <strong>Szczegóły:</strong> ${dbErrorMsg || 'Brak danych'}
+            <div class="zob-sheet" style="max-width:560px;margin:24px auto;text-align:center;gap:14px">
+              <div class="zob-sheet-title" style="justify-content:center"><span>Wczytaj bazę z pliku</span></div>
+              <p class="zob-mod-sub" style="margin:0;line-height:1.5">
+                Wskaż eksport Arkusza (<code>.json</code> / <code>.js</code>) — bez iframe i bez <code>arkusz3.html</code>.
+              </p>
+              <button class="zob-action-btn primary" style="align-self:center;height:40px;padding:0 22px" onclick="ZobowiazaniModule.loadJsonFile()">
+                Wczytaj bazę (.json)
+              </button>
+              ${dbErrorMsg ? `<div style="color:var(--zob-spine);font-size:.82rem;text-align:left;margin-top:8px"><strong>Arkusz:</strong> ${escapeHtml(dbErrorMsg)}</div>` : ''}
             </div>
           </div>
         `;
@@ -598,54 +783,46 @@ const ZobowiazaniModule = (() => {
 
       container.innerHTML = `
         <div class="zob-wrap">
-          <!-- GÓRNY PASEK -->
           <div class="zob-header">
             <div class="zob-title-area">
-              <h2 class="mod-title" style="margin:0; font-size:1.3rem;">📇 Baza Zobowiązanych</h2>
-              <p class="mod-sub" style="margin:0;">Karta: <strong>${escapeHtml(dbSheet.name || 'Zobowiązani')}</strong> — Inteligentny widok operacyjny</p>
+              <h2 class="zob-mod-title">Szafka teczek</h2>
+              <p class="zob-mod-sub">Kartoteka: <strong>${escapeHtml(dbSheet.name || 'Zobowiązani')}</strong> · źródło: <strong>${escapeHtml(dataSourceLabel || '—')}</strong> — ${dbSheet.rows.length} teczek</p>
             </div>
-            <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
-              <button class="nav-btn" style="height:32px; padding:0 12px; border-radius:8px; background:#16a34a; color:#fff; border:1px solid #15803d; font-weight:700;" onclick="ZobowiazaniModule.copyCleanExcel()" title="Kopiuje widoczne wiersze jako czysty tekst do wklejenia w Excelu (Ctrl+V) bez tabel, kolorów i obramowań">
-                📋 Kopiuj do Excela (czysty tekst)
-              </button>
-              <button class="nav-btn" style="height:32px; padding:0 12px; border-radius:8px; background:#eff6ff; color:#1d4ed8; border:1px solid #bfdbfe; font-weight:600;" onclick="ZobowiazaniModule.syncAllCepik()" title="Sprawdź wszystkich dłużników w bazie WRO i automatycznie oznacz UFG oraz dopisz pojazdy do Notatki">
-                🚗 Auto-Sync CEPIK (WRO)
-              </button>
-              <button class="nav-btn" style="height:32px; padding:0 12px; border-radius:8px;" onclick="ZobowiazaniModule.toggleDetailPane()" title="Pokaż/Ukryj boczny panel szczegółów">
-                <span>◨ Panel roboczy</span>
-              </button>
+            <div class="zob-actions">
+              <button class="zob-action-btn primary" onclick="ZobowiazaniModule.loadJsonFile()" title="Wczytaj bazę z pliku JSON / JS">Wczytaj JSON</button>
+              <button class="zob-action-btn olive" onclick="ZobowiazaniModule.copyCleanExcel()" title="Kopiuje widoczne teczki jako czysty tekst do Excela">Kopiuj do Excela</button>
+              <button class="zob-action-btn" onclick="ZobowiazaniModule.syncAllCepik()" title="Auto-sync CEPIK z WRO">Auto-Sync CEPIK</button>
+              <button class="zob-action-btn" onclick="ZobowiazaniModule.toggleDetailPane()" title="Pokaż/Ukryj otwartą teczkę">Teczka</button>
             </div>
           </div>
 
-          <!-- PASEK FILTRÓW I SZUKANIA -->
           <div class="zob-toolbar">
             <div class="zob-tool-top">
               <div class="zob-search-box">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-                <input type="text" class="zob-search" id="zob-search-input" placeholder="Szukaj po nazwisku, PESEL, NIP, adresie, mieście, notatce..." value="${escapeHtml(filterText)}">
+                <input type="text" class="zob-search" id="zob-search-input" placeholder="Szukaj w teczkach: nazwisko, PESEL, NIP, adres..." value="${escapeHtml(filterText)}">
               </div>
               <div class="zob-stats" id="zob-stats-badge">Ładowanie...</div>
             </div>
-            
             <div class="zob-pills" id="zob-pills-bar">
               <button class="zob-pill ${activeFilter === 'all' ? 'active' : ''}" onclick="ZobowiazaniModule.setFilter('all')">
                 Wszystkie <span class="zob-pill-count">${counts.all}</span>
               </button>
               <button class="zob-pill pill-danger ${activeFilter === 'todo' ? 'active' : ''}" onclick="ZobowiazaniModule.setFilter('todo')">
-                🔴 Do zrobienia (0/5) <span class="zob-pill-count">${counts.todo}</span>
+                Do zrobienia <span class="zob-pill-count">${counts.todo}</span>
               </button>
               <button class="zob-pill pill-warn ${activeFilter === 'progress' ? 'active' : ''}" onclick="ZobowiazaniModule.setFilter('progress')">
-                🟡 W toku (1-4/5) <span class="zob-pill-count">${counts.progress}</span>
+                W toku <span class="zob-pill-count">${counts.progress}</span>
               </button>
               <button class="zob-pill pill-ok ${activeFilter === 'complete' ? 'active' : ''}" onclick="ZobowiazaniModule.setFilter('complete')">
-                🟢 Komplet (5/5) <span class="zob-pill-count">${counts.complete}</span>
+                Komplet <span class="zob-pill-count">${counts.complete}</span>
               </button>
               ${counts.cepik > 0 ? `
-                <button class="zob-pill ${activeFilter === 'has_cepik' ? 'active' : ''}" style="border-color:#bfdbfe; color:#1d4ed8;" onclick="ZobowiazaniModule.setFilter('has_cepik')">
-                  🚗 W CEPIK (WRO) <span class="zob-pill-count" style="background:#dbeafe; color:#1e40af;">${counts.cepik}</span>
+                <button class="zob-pill ${activeFilter === 'has_cepik' ? 'active' : ''}" onclick="ZobowiazaniModule.setFilter('has_cepik')">
+                  W CEPIK <span class="zob-pill-count">${counts.cepik}</span>
                 </button>
               ` : ''}
-              <span style="color:var(--line); margin:0 4px;">|</span>
+              <span class="zob-pill-sep">|</span>
               <button class="zob-pill ${activeFilter === 'no_kawa' ? 'active' : ''}" onclick="ZobowiazaniModule.setFilter('no_kawa')">Brak KAWA</button>
               <button class="zob-pill ${activeFilter === 'no_sinf' ? 'active' : ''}" onclick="ZobowiazaniModule.setFilter('no_sinf')">Brak SINF</button>
               <button class="zob-pill ${activeFilter === 'no_ufg' ? 'active' : ''}" onclick="ZobowiazaniModule.setFilter('no_ufg')">Brak UFG</button>
@@ -654,31 +831,14 @@ const ZobowiazaniModule = (() => {
             </div>
           </div>
 
-          <!-- KONTENER HYBRYDOWY (MASTER-DETAIL SPLIT) -->
           <div class="zob-split-container">
-            <!-- LEWA STRONA: SMART TABELA -->
-            <div class="zob-table-pane">
-              <div class="zob-table-scroll" id="zob-table-scroll">
-                <table class="zob-smart-table">
-                  <thead>
-                    <tr>
-                      <th style="width:36px; text-align:center;">#</th>
-                      <th onclick="ZobowiazaniModule.sortBy('name')" style="min-width:210px;">Osoba / Identyfikatory ↕</th>
-                      <th style="min-width:200px;">Adres i Sprawa</th>
-                      <th style="min-width:180px; text-align:center;">Czynności (5 systemów)</th>
-                      <th onclick="ZobowiazaniModule.sortBy('stan')" style="width:90px; text-align:center;">Stan ↕</th>
-                      <th style="width:110px; text-align:center;">Szybka Akcja</th>
-                    </tr>
-                  </thead>
-                  <tbody id="zob-smart-tbody"></tbody>
-                </table>
-              </div>
-            </div>
-
-            <!-- PRAWA STRONA: MASTER-DETAIL INSPECTOR -->
-            <div class="zob-detail-pane ${detailOpen ? '' : 'collapsed'}" id="zob-detail-pane">
-              <div id="zob-detail-content" style="flex:1; display:flex; flex-direction:column; min-height:0;"></div>
-            </div>
+            <aside class="zob-drawer">
+              <div class="zob-drawer-head">Teczki w szufladzie</div>
+              <div class="zob-folder-scroll" id="zob-folder-list"></div>
+            </aside>
+            <section class="zob-folder-open ${detailOpen ? '' : 'collapsed'}" id="zob-detail-pane">
+              <div id="zob-detail-content"></div>
+            </section>
           </div>
         </div>
       `;
@@ -697,7 +857,7 @@ const ZobowiazaniModule = (() => {
       renderViews();
     } catch (err) {
       console.error(err);
-      container.innerHTML = `<div style="padding:20px; color:red">Błąd render: ${err.message}</div>`;
+      container.innerHTML = `<div class="zob-wrap" style="color:var(--zob-spine);padding:20px">Błąd render: ${escapeHtml(err.message)}</div>`;
     }
   }
 
@@ -731,7 +891,7 @@ const ZobowiazaniModule = (() => {
     }
   }
 
-  /* ─── RENDEROWANIE WIDOKÓW (TABELA + PANEL) ──────────────── */
+  /* ─── RENDEROWANIE WIDOKÓW (LISTA TECZEK + OTWARTA) ───── */
   function renderViews() {
     renderTableOnly();
     renderDetailOnly();
@@ -745,16 +905,30 @@ const ZobowiazaniModule = (() => {
     if (statsEl) {
       statsEl.innerHTML = `Pokazano: <strong>${visibleRows.length}</strong> z <strong>${counts.all}</strong>`;
     }
+    const bar = document.getElementById('zob-pills-bar');
+    if (!bar) return;
+    bar.querySelectorAll('.zob-pill').forEach(btn => {
+      const onclick = btn.getAttribute('onclick') || '';
+      const m = onclick.match(/setFilter\('([^']+)'\)/);
+      if (!m) return;
+      btn.classList.toggle('active', m[1] === activeFilter);
+    });
+  }
+
+  function statusMeta(sysCount) {
+    if (sysCount === REG_SYSTEMS.length) return { cls: 'complete', label: 'Komplet' };
+    if (sysCount > 0) return { cls: 'progress', label: 'W toku' };
+    return { cls: 'todo', label: 'Do zrobienia' };
   }
 
   function renderTableOnly() {
-    const tbody = document.getElementById('zob-smart-tbody');
-    if (!tbody || !dbSheet) return;
+    const list = document.getElementById('zob-folder-list');
+    if (!list || !dbSheet) return;
 
     const visibleRows = getFilteredRows();
 
     if (!visibleRows.length) {
-      tbody.innerHTML = `<tr><td colspan="6" class="zob-empty">Brak osób spełniających wybrane kryteria</td></tr>`;
+      list.innerHTML = `<div class="zob-folder-empty">Brak teczek spełniających wybrane kryteria</div>`;
       return;
     }
 
@@ -763,82 +937,68 @@ const ZobowiazaniModule = (() => {
     }
 
     let html = '';
-    visibleRows.forEach((item, displayIdx) => {
+    visibleRows.forEach((item) => {
       const r = item.row;
       const ri = item.idx;
       const info = extractPersonInfo(r);
       const isSelected = ri === selectedRowIndex;
       const sysCount = getPersonSysCount(r);
       const cepik = getCepikForPerson(info);
+      const st = statusMeta(sysCount);
 
-      let stanBadgeClass = 'st-puste';
-      if (sysCount === REG_SYSTEMS.length) stanBadgeClass = 'st-komplet';
-      else if (sysCount > 0) stanBadgeClass = 'st-czesciowo';
-
-      html += `<tr class="zob-smart-row ${isSelected ? 'selected' : ''}" onclick="ZobowiazaniModule.select(${ri})">`;
-      
-      // #
-      html += `<td style="color:var(--muted); text-align:center; font-size:0.75rem;">${displayIdx + 1}</td>`;
-
-      // Osoba & Identyfikatory
-      html += `<td>
-        <div class="zob-person-cell">
-          <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-            <span class="zob-person-name">${escapeHtml(info.name)}</span>
-            ${cepik ? `<span class="zob-badge-mono" style="background:#eff6ff; color:#1d4ed8; border-color:#bfdbfe; font-size:0.7rem;" title="CEPIK (WRO): ${escapeHtml(cepik.summaryText)}">🚗 ${cepik.vehicles.length} poj.</span>` : ''}
-          </div>
-          <div class="zob-person-ids">
-            ${info.pesel ? `<span class="zob-badge-mono" onclick="event.stopPropagation(); ZobowiazaniModule.copy('${info.pesel}', this)" title="Kopiuj PESEL">PESEL: ${info.pesel}</span>` : ''}
-            ${info.nip ? `<span class="zob-badge-mono" onclick="event.stopPropagation(); ZobowiazaniModule.copy('${info.nip}', this)" title="Kopiuj NIP">NIP: ${info.nip}</span>` : ''}
-            ${info.regon ? `<span class="zob-badge-mono" onclick="event.stopPropagation(); ZobowiazaniModule.copy('${info.regon}', this)" title="Kopiuj REGON">REGON: ${info.regon}</span>` : ''}
-          </div>
-        </div>
-      </td>`;
-
-      // Adres i Sprawa
-      html += `<td>
-        <div class="zob-addr-cell">
-          <div class="zob-addr-main">${escapeHtml(info.adresStr || 'Brak adresu')}</div>
-          ${(info.sygnatura || info.kwota) ? `<div class="zob-addr-sub">${escapeHtml([info.sygnatura, info.kwota].filter(Boolean).join(' • '))}</div>` : ''}
-          ${info.notatka ? `<div style="font-size:0.72rem; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:220px;" title="${escapeHtml(info.notatka)}">📝 ${escapeHtml(info.notatka)}</div>` : ''}
-        </div>
-      </td>`;
-
-      // Systemy (5 w 1)
-      html += `<td style="text-align:center;">
-        <div class="zob-sys-group" onclick="event.stopPropagation();">`;
+      let dots = '';
       REG_SYSTEMS.forEach(sys => {
         const sysIdx = dbSheet.columns.indexOf(sys);
         const sysVal = sysIdx >= 0 ? String(r[sysIdx] || '').trim() : '';
         const isDone = sysVal !== '' && sysVal.toLowerCase() !== 'pomiń';
         const isSkip = sysVal.toLowerCase() === 'pomiń';
-
-        let pillClass = 'zob-sys-pill';
-        if (isDone) pillClass += ' done';
-        else if (isSkip) pillClass += ' skip';
-
-        const txt = isDone ? '✓' : (isSkip ? 'P' : sys.charAt(0));
-        const tooltip = isDone ? `${sys}: Zrobiono ${sysVal}` : `${sys}: Kliknij, aby oznaczyć dzisiaj`;
-
-        html += `<button class="${pillClass}" onclick="ZobowiazaniModule.toggle(${ri}, '${sys}')" title="${tooltip}">${txt}</button>`;
+        dots += `<span class="zob-dot ${isDone ? 'on' : ''}${isSkip ? ' skip' : ''}" title="${sys}"></span>`;
       });
-      html += `<span class="zob-sys-progress">${sysCount}/5</span>`;
-      html += `</div></td>`;
 
-      // Stan
-      html += `<td style="text-align:center;">
-        <span class="zob-stan-badge ${stanBadgeClass}">${info.stan || (sysCount === 5 ? 'Komplet' : (sysCount > 0 ? 'W toku' : 'Puste'))}</span>
-      </td>`;
-
-      // Szybka Akcja
-      html += `<td style="text-align:center; white-space:nowrap;" onclick="event.stopPropagation();">
-        <button class="zob-btn-komplet" onclick="ZobowiazaniModule.setAll(${ri})" title="Oznacz wszystkie 5 czynności dzisiejszą datą">✨ Komplet</button>
-      </td>`;
-
-      html += `</tr>`;
+      html += `
+        <button type="button" class="zob-teczka ${isSelected ? 'is-selected' : ''}" onclick="ZobowiazaniModule.select(${ri})" aria-pressed="${isSelected}">
+          <span class="zob-teczka-spine" aria-hidden="true"></span>
+          <span class="zob-teczka-body">
+            <span class="zob-teczka-name" title="${escapeHtml(info.name)}">${escapeHtml(info.name)}</span>
+            <span class="zob-teczka-meta">
+              ${info.pesel ? `<span class="zob-teczka-id">${escapeHtml(info.pesel)}</span>` : ''}
+              ${info.nip ? `<span class="zob-teczka-id">NIP ${escapeHtml(info.nip)}</span>` : ''}
+              ${cepik ? `<span class="zob-teczka-cepik">${cepik.vehicles.length} poj.</span>` : ''}
+            </span>
+            <span class="zob-teczka-foot">
+              <span class="zob-teczka-dots">${dots}</span>
+              <span class="zob-status-chip ${st.cls}">${st.label}</span>
+            </span>
+          </span>
+        </button>
+      `;
     });
 
-    tbody.innerHTML = html;
+    list.innerHTML = html;
+
+    const selectedEl = list.querySelector('.zob-teczka.is-selected');
+    if (selectedEl) {
+      selectedEl.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+  }
+
+  function setDetailTab(tabId) {
+    detailTab = tabId;
+    renderDetailOnly();
+  }
+
+  function saveNote(rowIndex, value) {
+    if (!dbSheet || !dbSheet.rows[rowIndex]) return;
+    ensureSystemColumns(dbSheet);
+    let notatkaIdx = dbSheet.columns.findIndex(c => /^notatka$/i.test(c) || /notatk/i.test(c));
+    if (notatkaIdx < 0) {
+      dbSheet.columns.push('Notatka');
+      notatkaIdx = dbSheet.columns.length - 1;
+    }
+    const r = dbSheet.rows[rowIndex];
+    while (r.length < dbSheet.columns.length) r.push('');
+    r[notatkaIdx] = value;
+    saveData();
   }
 
   function renderDetailOnly() {
@@ -846,7 +1006,7 @@ const ZobowiazaniModule = (() => {
     if (!detailContent || !dbSheet || !dbSheet.rows) return;
 
     if (selectedRowIndex < 0 || selectedRowIndex >= dbSheet.rows.length) {
-      detailContent.innerHTML = `<div style="padding:30px; text-align:center; color:var(--muted);">Wybierz osobę z listy po lewej</div>`;
+      detailContent.innerHTML = `<div class="zob-folder-empty" style="padding:48px 24px">Wybierz teczkę z szuflady po lewej</div>`;
       return;
     }
 
@@ -856,154 +1016,150 @@ const ZobowiazaniModule = (() => {
     const visibleRows = getFilteredRows();
     const curVisIdx = visibleRows.findIndex(item => item.idx === selectedRowIndex);
     const cepik = getCepikForPerson(info);
+    const st = statusMeta(sysCount);
+    const animKey = ++folderAnimToken;
 
-    let html = `
-      <!-- NAGŁÓWEK INSPEKTORA -->
-      <div class="zob-detail-header">
-        <div>
-          <div class="zob-detail-title">${escapeHtml(info.name)}</div>
-          <div style="font-size:0.75rem; color:var(--muted); margin-top:2px;">Wiersz w bazie: #${selectedRowIndex + 1}</div>
+    const tabs = [
+      { id: 'dane', label: 'Dane' },
+      { id: 'systemy', label: 'Systemy' },
+      { id: 'cepik', label: 'CEPIK' },
+      { id: 'notatka', label: 'Notatka' },
+    ];
+
+    let bodyHtml = '';
+
+    if (detailTab === 'dane') {
+      bodyHtml = `
+        <div class="zob-sheet">
+          <div class="zob-sheet-title"><span>Dane identyfikacyjne</span><span>Kliknij, by skopiować</span></div>
+          ${info.pesel ? `<div class="zob-id-row"><span class="zob-id-label">PESEL</span><span class="zob-badge-mono" onclick="ZobowiazaniModule.copy('${info.pesel}', this)">${info.pesel}</span></div>` : ''}
+          ${info.nip ? `<div class="zob-id-row"><span class="zob-id-label">NIP</span><span class="zob-badge-mono" onclick="ZobowiazaniModule.copy('${info.nip}', this)">${info.nip}</span></div>` : ''}
+          ${info.regon ? `<div class="zob-id-row"><span class="zob-id-label">REGON</span><span class="zob-badge-mono" onclick="ZobowiazaniModule.copy('${info.regon}', this)">${info.regon}</span></div>` : ''}
+          ${info.adresStr ? `<div class="zob-id-row"><span class="zob-id-label">Adres</span><span class="zob-kv-val" onclick="ZobowiazaniModule.copy('${escapeHtml(info.adresStr).replace(/'/g, "\\'")}', this)">${escapeHtml(info.adresStr)}</span></div>` : ''}
+          ${(info.sygnatura || info.kwota) ? `<div class="zob-id-row"><span class="zob-id-label">Sprawa</span><span class="zob-kv-val">${escapeHtml([info.sygnatura, info.kwota].filter(Boolean).join(' · '))}</span></div>` : ''}
         </div>
-        <button class="zob-btn-komplet" onclick="ZobowiazaniModule.setAll(${selectedRowIndex})" title="Oznacz komplet">✨ Komplet</button>
-      </div>
-
-      <!-- CIAŁO INSPEKTORA -->
-      <div class="zob-detail-body">
-        <!-- KARTA IDENTYFIKACYJNA -->
-        <div class="zob-detail-card">
-          <div class="zob-detail-card-title">
-            <span>Dane Identyfikacyjne</span>
-            <span style="font-size:0.7rem; color:var(--accent);">Kliknij, by skopiować</span>
-          </div>
-          <div style="display:flex; flex-direction:column; gap:6px;">
-            ${info.pesel ? `
-              <div style="display:flex; justify-content:space-between; align-items:center; background:var(--panel); padding:6px 10px; border-radius:6px; border:1px solid var(--line);">
-                <span style="font-size:0.75rem; color:var(--muted);">PESEL:</span>
-                <span class="zob-badge-mono" onclick="ZobowiazaniModule.copy('${info.pesel}', this)">${info.pesel} 📋</span>
-              </div>` : ''}
-            ${info.nip ? `
-              <div style="display:flex; justify-content:space-between; align-items:center; background:var(--panel); padding:6px 10px; border-radius:6px; border:1px solid var(--line);">
-                <span style="font-size:0.75rem; color:var(--muted);">NIP:</span>
-                <span class="zob-badge-mono" onclick="ZobowiazaniModule.copy('${info.nip}', this)">${info.nip} 📋</span>
-              </div>` : ''}
-            ${info.regon ? `
-              <div style="display:flex; justify-content:space-between; align-items:center; background:var(--panel); padding:6px 10px; border-radius:6px; border:1px solid var(--line);">
-                <span style="font-size:0.75rem; color:var(--muted);">REGON:</span>
-                <span class="zob-badge-mono" onclick="ZobowiazaniModule.copy('${info.regon}', this)">${info.regon} 📋</span>
-              </div>` : ''}
-            ${info.adresStr ? `
-              <div style="display:flex; justify-content:space-between; align-items:flex-start; background:var(--panel); padding:6px 10px; border-radius:6px; border:1px solid var(--line);">
-                <span style="font-size:0.75rem; color:var(--muted); margin-top:2px;">Adres:</span>
-                <span style="font-size:0.8rem; font-weight:600; text-align:right; cursor:pointer;" onclick="ZobowiazaniModule.copy('${info.adresStr}', this)" title="Kopiuj adres">${escapeHtml(info.adresStr)} 📋</span>
-              </div>` : ''}
+        <div class="zob-sheet">
+          <div class="zob-sheet-title"><span>Pozostałe pola z Arkusza</span></div>
+          <div class="zob-kv-grid">
+            ${dbSheet.columns.map((colName, cIdx) => {
+              if (REG_SYSTEMS.includes(colName) || colName === 'Stan' || colName === 'Komplet') return '';
+              const rawVal = String(r[cIdx] || '').trim();
+              if (!rawVal) return '';
+              const isLong = rawVal.length > 25;
+              return `<div class="zob-kv-item ${isLong ? 'full' : ''}">
+                <div class="zob-kv-label">${escapeHtml(colName)}</div>
+                <div class="zob-kv-val" onclick="ZobowiazaniModule.copy('${escapeHtml(rawVal).replace(/'/g, "\\'")}', this)">${escapeHtml(rawVal)}</div>
+              </div>`;
+            }).join('')}
           </div>
         </div>
-
-        <!-- SEKCJA CEPIK (WRO) SYNCHRONIZACJA -->
-        ${cepik ? `
-          <div class="zob-detail-card" style="border-left: 3px solid #2563eb; background: color-mix(in srgb, var(--panel2) 90%, #eff6ff);">
-            <div class="zob-detail-card-title">
-              <span style="color:#1d4ed8; font-weight:800;">🚗 Dane z CEPIK (WRO)</span>
-              <button class="zob-btn-komplet" style="background:#2563eb; color:#fff; font-size:0.72rem; padding:4px 10px;" onclick="ZobowiazaniModule.syncCepik(${selectedRowIndex})" title="Wstaw dzisiejszą datę do UFG i dopisz pojazdy do Notatki">
-                🔄 Zsynchronizuj CEPIK
-              </button>
+      `;
+    } else if (detailTab === 'systemy') {
+      bodyHtml = `
+        <div class="zob-sheet">
+          <div class="zob-sheet-title">
+            <span>Czynności systemowe</span>
+            <span style="color:${sysCount === 5 ? 'var(--zob-olive)' : 'var(--zob-spine)'}">${sysCount} z 5</span>
+          </div>
+          <div class="zob-systems-grid">
+            ${REG_SYSTEMS.map(sys => {
+              const idx = dbSheet.columns.indexOf(sys);
+              const val = idx >= 0 ? String(r[idx] || '').trim() : '';
+              const isDone = val !== '' && val.toLowerCase() !== 'pomiń';
+              const isSkip = val.toLowerCase() === 'pomiń';
+              return `<div class="zob-sys-tile ${isDone ? 'done' : ''}" onclick="ZobowiazaniModule.toggle(${selectedRowIndex}, '${sys}')">
+                <div class="zob-sys-tile-name"><span>${sys}</span><span>${isDone ? '✓' : (isSkip ? 'P' : '+')}</span></div>
+                <div class="zob-sys-tile-val">${escapeHtml(val || 'Brak — kliknij')}</div>
+              </div>`;
+            }).join('')}
+          </div>
+        </div>
+      `;
+    } else if (detailTab === 'cepik') {
+      if (cepik) {
+        bodyHtml = `
+          <div class="zob-sheet">
+            <div class="zob-sheet-title">
+              <span>Dane z CEPIK (WRO)</span>
+              <button class="zob-btn-komplet" onclick="ZobowiazaniModule.syncCepik(${selectedRowIndex})">Synchronizuj</button>
             </div>
-            <div style="display:flex; flex-direction:column; gap:6px; font-size:0.8rem;">
+            <div style="display:flex;flex-direction:column;gap:8px">
               ${cepik.vehicles.map(v => `
-                <div style="background:var(--panel); border:1px solid #bfdbfe; border-radius:6px; padding:6px 10px; display:flex; justify-content:space-between; align-items:center;">
+                <div class="zob-vehicle">
                   <div>
-                    <div style="font-weight:700; color:var(--text);">${escapeHtml(v.brand || 'Pojazd')}</div>
-                    <div style="font-size:0.72rem; color:var(--muted);">${v.vin ? `VIN: ${v.vin}` : ''} ${v.polisa ? `• Polisa: ${v.polisa}` : ''}</div>
+                    <div class="zob-vehicle-brand">${escapeHtml(v.brand || 'Pojazd')}</div>
+                    <div class="zob-vehicle-meta">${v.vin ? `VIN: ${escapeHtml(v.vin)}` : ''} ${v.polisa ? `· Polisa: ${escapeHtml(v.polisa)}` : ''}</div>
                   </div>
-                  <span class="zob-badge-mono" style="background:#eff6ff; color:#1d4ed8; border-color:#bfdbfe;">${escapeHtml(v.plate || 'Brak tablicy')}</span>
+                  <span class="zob-badge-mono">${escapeHtml(v.plate || 'Brak tablicy')}</span>
                 </div>
               `).join('')}
             </div>
           </div>
-        ` : `
-          <div class="zob-detail-card" style="border-style:dashed; opacity:0.85;">
-            <div style="display:flex; justify-content:space-between; align-items:center;">
-              <span style="font-size:0.75rem; color:var(--muted);">🚗 CEPIK: brak ustaleń w WRO</span>
-              <button class="nav-btn" style="height:24px; padding:0 8px; font-size:0.72rem; border-radius:4px;" onclick="Router.navigate('wro', { pesel: '${info.pesel || ''}', nip: '${info.nip || ''}' })">Otwórz w WRO</button>
-            </div>
+        `;
+      } else {
+        bodyHtml = `
+          <div class="zob-sheet" style="border-style:dashed">
+            <div class="zob-sheet-title"><span>CEPIK</span></div>
+            <p class="zob-mod-sub" style="margin:0">Brak ustaleń w WRO dla tej osoby.</p>
+            <button class="zob-action-btn" style="align-self:flex-start;margin-top:8px" onclick="Router.navigate('wro', { pesel: '${info.pesel || ''}', nip: '${info.nip || ''}' })">Otwórz w WRO</button>
           </div>
-        `}
-
-        <!-- CENTRUM SYSTEMÓW (5 KAFELKÓW) -->
-        <div class="zob-detail-card">
-          <div class="zob-detail-card-title">
-            <span>Czynności Systemowe</span>
-            <span style="font-weight:700; color:${sysCount === 5 ? '#16a34a' : 'var(--accent)'};">${sysCount} z 5 zrobione</span>
-          </div>
-          
-          <div class="zob-detail-systems-grid">
-    `;
-
-    REG_SYSTEMS.forEach(sys => {
-      const idx = dbSheet.columns.indexOf(sys);
-      const val = idx >= 0 ? String(r[idx] || '').trim() : '';
-      const isDone = val !== '' && val.toLowerCase() !== 'pomiń';
-      const isSkip = val.toLowerCase() === 'pomiń';
-
-      html += `
-        <div class="zob-detail-sys-item ${isDone ? 'done' : ''}" onclick="ZobowiazaniModule.toggle(${selectedRowIndex}, '${sys}')">
-          <div class="zob-detail-sys-name">
-            <span>${sys}</span>
-            <span>${isDone ? '✓' : (isSkip ? 'Pomiń' : '+')}</span>
-          </div>
-          <div class="zob-detail-sys-val">${escapeHtml(val || 'Brak — kliknij')}</div>
+        `;
+      }
+    } else {
+      bodyHtml = `
+        <div class="zob-sheet">
+          <div class="zob-sheet-title"><span>Notatka w teczce</span><span>Zapis przy opuszczeniu pola</span></div>
+          <textarea class="zob-note-area" id="zob-note-input" placeholder="Notatki do sprawy...">${escapeHtml(info.notatka || '')}</textarea>
         </div>
       `;
-    });
+    }
 
-    html += `
-          </div>
+    detailContent.innerHTML = `
+      <div class="zob-open-header" data-anim="${animKey}">
+        <div>
+          <div class="zob-open-title">${escapeHtml(info.name)}</div>
+          <div class="zob-open-sub">Teczka #${selectedRowIndex + 1} · <span class="zob-status-chip ${st.cls}">${st.label}</span> · ${sysCount}/5 systemów</div>
         </div>
-
-        <!-- WSZYSTKIE POZOSTAŁE POLA Z ARKUSZA -->
-        <div class="zob-detail-card">
-          <div class="zob-detail-card-title">
-            <span>Wszystkie kolumny z Arkusza</span>
-          </div>
-          <div class="zob-kv-grid">
-    `;
-
-    dbSheet.columns.forEach((colName, cIdx) => {
-      if (REG_SYSTEMS.includes(colName) || colName === 'Stan' || colName === 'Komplet') return;
-      const rawVal = String(r[cIdx] || '').trim();
-      if (!rawVal) return;
-
-      const isLong = rawVal.length > 25;
-      html += `
-        <div class="zob-kv-item ${isLong ? 'full' : ''}">
-          <div class="zob-kv-label">${escapeHtml(colName)}</div>
-          <div class="zob-kv-val" onclick="ZobowiazaniModule.copy('${escapeHtml(rawVal)}', this)" title="Kliknij, aby skopiować">${escapeHtml(rawVal)}</div>
-        </div>
-      `;
-    });
-
-    html += `
-          </div>
-        </div>
+        <button class="zob-btn-komplet" onclick="ZobowiazaniModule.setAll(${selectedRowIndex})" title="Oznacz komplet">Komplet</button>
       </div>
-
-      <!-- DOLNA NAWIGACJA -->
-      <div class="zob-detail-footer">
-        <button class="zob-nav-btn" onclick="ZobowiazaniModule.prevPerson()" title="Poprzednia osoba (Strzałka w górę)">← Poprzedni</button>
-        <span style="font-size:0.75rem; color:var(--muted); font-weight:600;">
-          ${curVisIdx >= 0 ? `${curVisIdx + 1} / ${visibleRows.length}` : ''}
-        </span>
-        <button class="zob-nav-btn" onclick="ZobowiazaniModule.nextPerson()" title="Następna osoba (Strzałka w dół)">Następny →</button>
-        <button class="zob-nav-btn" style="background:var(--soft); color:var(--accent);" onclick="ZobowiazaniModule.nextTodo()" title="Przeskocz do następnej niekompletnej osoby">⏩ Do zrobienia</button>
+      <div class="zob-open-tabs">
+        ${tabs.map(t => `<button type="button" class="zob-tab ${detailTab === t.id ? 'active' : ''}" onclick="ZobowiazaniModule.setTab('${t.id}')">${t.label}</button>`).join('')}
+      </div>
+      <div class="zob-open-body" key="${detailTab}-${animKey}">
+        ${bodyHtml}
+      </div>
+      <div class="zob-open-footer">
+        <button class="zob-nav-btn" onclick="ZobowiazaniModule.prevPerson()" title="Poprzednia teczka">← Poprzedni</button>
+        <span class="zob-mod-sub">${curVisIdx >= 0 ? `${curVisIdx + 1} / ${visibleRows.length}` : ''}</span>
+        <button class="zob-nav-btn" onclick="ZobowiazaniModule.nextPerson()" title="Następna teczka">Następny →</button>
+        <button class="zob-nav-btn accent" onclick="ZobowiazaniModule.nextTodo()" title="Następna niekompletna">Do zrobienia</button>
       </div>
     `;
 
-    detailContent.innerHTML = html;
+    const noteInput = document.getElementById('zob-note-input');
+    if (noteInput) {
+      noteInput.addEventListener('blur', () => {
+        saveNote(selectedRowIndex, noteInput.value);
+      });
+    }
+
+    // Restart tab animation
+    const body = detailContent.querySelector('.zob-open-body');
+    if (body) {
+      body.style.animation = 'none';
+      void body.offsetWidth;
+      body.style.animation = '';
+    }
   }
 
   /* ─── NAWIGACJA I AKCJE ────────────────────────────────── */
   function selectRow(ri) {
     selectedRowIndex = ri;
+    if (!detailOpen) {
+      detailOpen = true;
+      const pane = document.getElementById('zob-detail-pane');
+      if (pane) pane.classList.remove('collapsed');
+    }
     renderViews();
   }
 
@@ -1116,6 +1272,7 @@ const ZobowiazaniModule = (() => {
     setAll: setAllSystems,
     setFilter,
     sortBy,
+    setTab: setDetailTab,
     prevPerson,
     nextPerson,
     nextTodo,
@@ -1123,7 +1280,8 @@ const ZobowiazaniModule = (() => {
     syncCepik: syncCepikForPerson,
     syncAllCepik: syncAllCepikFromWro,
     copyCleanExcel: copyCleanExcelText,
-    copy: copyToClipboard
+    copy: copyToClipboard,
+    loadJsonFile: triggerFilePicker
   };
 
 })();

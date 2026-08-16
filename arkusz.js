@@ -14,10 +14,22 @@ const ArkuszModule = (() => {
   let _selectedId = null;
 
   /* ─── Ścieżka do oryginału ─────────────────────── */
-  /* index.html jest w Egzebiurko-3.0/
-     arkusz3.html jest w      html/
-     => względna ścieżka:     ../html/arkusz3.html   */
-  const ARKUSZ_SRC = '../html/arkusz3.html';
+  /* index.html w egzebiurko-3.0/  →  ../html/arkusz3.html
+     index z rozpakowanego ZIP w .../31/... → ../../html/arkusz3.html */
+  function resolveArkuszSrc() {
+    const path = String(window.location.pathname || '').replace(/\\/g, '/');
+    const candidates = [
+      '../html/arkusz3.html',
+      '../../html/arkusz3.html',
+      'html/arkusz3.html',
+      './html/arkusz3.html',
+    ];
+    if (/\/31\//.test(path) || /egzebiurko-3\.0-main/.test(path)) {
+      return '../../html/arkusz3.html';
+    }
+    return candidates[0];
+  }
+  let ARKUSZ_SRC = resolveArkuszSrc();
 
   /* ─── RENDER ────────────────────────────────────── */
   function render() {
@@ -222,11 +234,14 @@ const ArkuszModule = (() => {
 
   /* ─── UTILS ─────────────────────────────────────── */
   function openInNewTab() {
-    /* Oblicz ścieżkę bezwzględną na podstawie location.href */
-    const base = window.location.href.replace(/\/[^/]*$/, '/');
-    const url  = base + ARKUSZ_SRC;
-    window.open(url, '_blank');
-    showToast('📋 Arkusz otwarty w nowej karcie — localStorage jest wspólny! Synchronizacja działa.', 'info', 5000);
+    ARKUSZ_SRC = resolveArkuszSrc();
+    try {
+      const url = new URL(ARKUSZ_SRC, window.location.href).href;
+      window.open(url, '_blank');
+    } catch {
+      window.open(ARKUSZ_SRC, '_blank');
+    }
+    showToast('Arkusz otwarty w nowej karcie — localStorage jest wspólny.', 'info', 5000);
   }
 
   function tryReload() {

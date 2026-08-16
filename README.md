@@ -52,7 +52,8 @@ Otwórz `index.html` dwuklikiem. Potem:
 |-------|------|
 | Analityka WRO | baza `.js` / `.json` z makra Excel |
 | OGNIVO | odpowiedzi banków `.xml` |
-| Arkusz / Zobowiązani | dane w `localStorage` przeglądarki |
+| Szafka teczek | baza `.json` / `.js` (przycisk **Wczytaj JSON**) albo dane z Arkusza |
+| Arkusz | `../html/arkusz3.html` (folder `egzebiurko/html/`) |
 
 ## Uwagi
 
