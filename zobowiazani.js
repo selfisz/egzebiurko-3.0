@@ -10,6 +10,7 @@ const ZobowiazaniModule = (() => {
 
   const AUTOSAVE_KEY = 'ots_autosave_v1';
   const REG_SYSTEMS = ['KAWA', 'SINF', 'UFG', 'JPK', 'INFZ'];
+  const DEFER_COL = 'Wróć';
   const FILE_SOURCE_KEY = 'egze3_zob_file_source';
 
   let activated = false;
@@ -20,7 +21,7 @@ const ZobowiazaniModule = (() => {
   
   // Stan filtrów i widoku
   let filterText = '';
-  let activeFilter = 'all'; // 'all', 'todo', 'progress', 'complete', 'has_cepik', 'no_kawa', 'no_jpk', 'no_ufg', 'no_sinf', 'no_infz'
+  let activeFilter = 'all'; // 'all', 'todo', 'progress', 'complete', 'deferred', 'due', 'has_cepik', 'no_*'
   let sortCol = 'idx';
   let sortDir = 1;
   let selectedRowIndex = 0;
@@ -355,7 +356,7 @@ const ZobowiazaniModule = (() => {
 
   function ensureSystemColumns(sheet) {
     if (!sheet || !sheet.columns) return;
-    const needed = [...REG_SYSTEMS, 'Stan', 'Komplet', 'Notatka'];
+    const needed = [...REG_SYSTEMS, 'Stan', 'Komplet', 'Notatka', DEFER_COL];
     let added = false;
     needed.forEach(colName => {
       if (!sheet.columns.includes(colName)) {
@@ -371,6 +372,85 @@ const ZobowiazaniModule = (() => {
         while (r.length < sheet.columns.length) r.push('');
       });
     }
+  }
+
+  function formatDatePl(d) {
+    return String(d.getDate()).padStart(2, '0') + '.' +
+      String(d.getMonth() + 1).padStart(2, '0') + '.' + d.getFullYear();
+  }
+
+  function parseDatePl(s) {
+    const m = String(s || '').trim().match(/^(\d{1,2})[.\/\-](\d{1,2})[.\/\-](\d{4})$/);
+    if (!m) return null;
+    const d = new Date(+m[3], +m[2] - 1, +m[1]);
+    d.setHours(0, 0, 0, 0);
+    return isNaN(d.getTime()) ? null : d;
+  }
+
+  function todayStart() {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }
+
+  function getDeferValue(row) {
+    if (!dbSheet || !row) return '';
+    const idx = dbSheet.columns.indexOf(DEFER_COL);
+    if (idx < 0) return '';
+    return String(row[idx] || '').trim();
+  }
+
+  function getDeferInfo(row) {
+    const raw = getDeferValue(row);
+    if (!raw) return null;
+    const d = parseDatePl(raw);
+    if (!d) return { raw, date: null, due: false, future: false };
+    const today = todayStart();
+    const due = d.getTime() <= today.getTime();
+    return { raw, date: d, due, future: !due };
+  }
+
+  function setDeferDate(rowIndex, dateStr) {
+    if (!dbSheet || !dbSheet.rows[rowIndex]) return;
+    ensureSystemColumns(dbSheet);
+    const idx = dbSheet.columns.indexOf(DEFER_COL);
+    const row = dbSheet.rows[rowIndex];
+    while (row.length < dbSheet.columns.length) row.push('');
+    row[idx] = dateStr || '';
+    saveData();
+    renderViews();
+  }
+
+  function deferByDays(rowIndex, days) {
+    const d = todayStart();
+    d.setDate(d.getDate() + days);
+    const label = formatDatePl(d);
+    setDeferDate(rowIndex, label);
+    if (typeof showToast === 'function') {
+      showToast(`Odłożono — wróć ${label}`, 'info', 2200);
+    }
+  }
+
+  function deferPickDate(rowIndex) {
+    const current = getDeferValue(dbSheet.rows[rowIndex]) || formatDatePl(todayStart());
+    const ans = prompt('Data powrotu (DD.MM.RRRR):', current);
+    if (ans == null) return;
+    const trimmed = ans.trim();
+    if (!trimmed) {
+      clearDefer(rowIndex);
+      return;
+    }
+    if (!parseDatePl(trimmed)) {
+      if (typeof showToast === 'function') showToast('Zły format daty — użyj DD.MM.RRRR', 'warn', 2500);
+      return;
+    }
+    setDeferDate(rowIndex, trimmed);
+    if (typeof showToast === 'function') showToast(`Przypomnienie: wróć ${trimmed}`, 'info', 2200);
+  }
+
+  function clearDefer(rowIndex) {
+    setDeferDate(rowIndex, '');
+    if (typeof showToast === 'function') showToast('Zdjęto odłożenie', 'info', 1600);
   }
 
   function saveData() {
@@ -564,7 +644,7 @@ const ZobowiazaniModule = (() => {
     if (!name) {
       for (let i = 0; i < cols.length; i++) {
         const cName = String(cols[i] || '').trim();
-        if (REG_SYSTEMS.includes(cName) || ['Stan', 'Komplet', 'LP', 'L.p.', 'Lp', 'ID', 'Notatka'].includes(cName)) continue;
+        if (REG_SYSTEMS.includes(cName) || ['Stan', 'Komplet', 'LP', 'L.p.', 'Lp', 'ID', 'Notatka', DEFER_COL].includes(cName)) continue;
         if (/pesel|nip|regon|data|kwota|sygn|stan|komplet|notatk/i.test(cName)) continue;
         
         const val = getColVal(i);
@@ -756,6 +836,13 @@ const ZobowiazaniModule = (() => {
       });
     } else if (activeFilter === 'complete') {
       rowsWithIndex = rowsWithIndex.filter(item => getPersonSysCount(item.row) === REG_SYSTEMS.length);
+    } else if (activeFilter === 'deferred') {
+      rowsWithIndex = rowsWithIndex.filter(item => !!getDeferInfo(item.row));
+    } else if (activeFilter === 'due') {
+      rowsWithIndex = rowsWithIndex.filter(item => {
+        const d = getDeferInfo(item.row);
+        return d && d.due;
+      });
     } else if (activeFilter === 'has_cepik') {
       rowsWithIndex = rowsWithIndex.filter(item => {
         const info = extractPersonInfo(item.row);
@@ -776,7 +863,13 @@ const ZobowiazaniModule = (() => {
       rowsWithIndex.sort((a, b) => {
         const nA = extractPersonInfo(a.row).name.toLowerCase();
         const nB = extractPersonInfo(b.row).name.toLowerCase();
-        return nA.localeCompare(nB) * sortDir;
+        return nA.localeCompare(nB, 'pl') * sortDir;
+      });
+    } else if (sortCol === 'pesel') {
+      rowsWithIndex.sort((a, b) => {
+        const nA = extractPersonInfo(a.row).pesel || extractPersonInfo(a.row).nip || '';
+        const nB = extractPersonInfo(b.row).pesel || extractPersonInfo(b.row).nip || '';
+        return String(nA).localeCompare(String(nB), 'pl') * sortDir;
       });
     } else if (sortCol === 'stan') {
       rowsWithIndex.sort((a, b) => {
@@ -791,16 +884,19 @@ const ZobowiazaniModule = (() => {
         const numA = parseFloat(valA.replace(',', '.'));
         const numB = parseFloat(valB.replace(',', '.'));
         if (!isNaN(numA) && !isNaN(numB)) return (numA - numB) * sortDir;
-        return valA.localeCompare(valB) * sortDir;
+        return valA.localeCompare(valB, 'pl') * sortDir;
       });
+    } else {
+      // domyślnie: kolejność jak w Arkuszu (idx)
+      rowsWithIndex.sort((a, b) => (a.idx - b.idx) * (sortDir || 1));
     }
 
     return rowsWithIndex;
   }
 
   function computeFilterCounts() {
-    if (!dbSheet || !dbSheet.rows) return { all: 0, todo: 0, progress: 0, complete: 0, cepik: 0 };
-    let todo = 0, progress = 0, complete = 0, cepikCount = 0;
+    if (!dbSheet || !dbSheet.rows) return { all: 0, todo: 0, progress: 0, complete: 0, cepik: 0, deferred: 0, due: 0 };
+    let todo = 0, progress = 0, complete = 0, cepikCount = 0, deferred = 0, due = 0;
     dbSheet.rows.forEach(r => {
       const c = getPersonSysCount(r);
       if (c === 0) todo++;
@@ -809,8 +905,14 @@ const ZobowiazaniModule = (() => {
 
       const info = extractPersonInfo(r);
       if (getCepikForPerson(info)) cepikCount++;
+
+      const def = getDeferInfo(r);
+      if (def) {
+        deferred++;
+        if (def.due) due++;
+      }
     });
-    return { all: dbSheet.rows.length, todo, progress, complete, cepik: cepikCount };
+    return { all: dbSheet.rows.length, todo, progress, complete, cepik: cepikCount, deferred, due };
   }
 
   /* ─── RENDEROWANIE GŁÓWNEGO WIDOKU ─────────────────────── */
@@ -858,7 +960,7 @@ const ZobowiazaniModule = (() => {
           <div class="zob-header">
             <div class="zob-title-area">
               <h2 class="zob-mod-title">Szafka teczek</h2>
-              <p class="zob-mod-sub">Kartoteka: <strong>${escapeHtml(dbSheet.name || 'Zobowiązani')}</strong> · źródło: <strong>${escapeHtml(dataSourceLabel || '—')}</strong> — ${dbSheet.rows.length} teczek</p>
+              <p class="zob-mod-sub">Lista jak w Arkuszu + otwarta teczka po prawej · <strong>${escapeHtml(dbSheet.name || 'Zobowiązani')}</strong> · ${escapeHtml(dataSourceLabel || '—')} · ${dbSheet.rows.length} osób</p>
             </div>
             <div class="zob-actions">
               <button class="zob-action-btn" onclick="ZobowiazaniModule.refreshFromArkusz()" title="Pobierz aktualną bazę z Arkusza">Odśwież z Arkusza</button>
@@ -890,6 +992,12 @@ const ZobowiazaniModule = (() => {
               <button class="zob-pill pill-ok ${activeFilter === 'complete' ? 'active' : ''}" onclick="ZobowiazaniModule.setFilter('complete')">
                 Komplet <span class="zob-pill-count">${counts.complete}</span>
               </button>
+              <button class="zob-pill ${activeFilter === 'deferred' ? 'active' : ''}" onclick="ZobowiazaniModule.setFilter('deferred')">
+                Na później <span class="zob-pill-count">${counts.deferred}</span>
+              </button>
+              <button class="zob-pill pill-warn ${activeFilter === 'due' ? 'active' : ''}" onclick="ZobowiazaniModule.setFilter('due')">
+                Do powrotu <span class="zob-pill-count">${counts.due}</span>
+              </button>
               ${counts.cepik > 0 ? `
                 <button class="zob-pill ${activeFilter === 'has_cepik' ? 'active' : ''}" onclick="ZobowiazaniModule.setFilter('has_cepik')">
                   W CEPIK <span class="zob-pill-count">${counts.cepik}</span>
@@ -906,7 +1014,10 @@ const ZobowiazaniModule = (() => {
 
           <div class="zob-split-container">
             <aside class="zob-drawer">
-              <div class="zob-drawer-head">Teczki w szufladzie</div>
+              <div class="zob-drawer-head">
+                <span class="zob-drawer-head-title">Zobowiązani — lista</span>
+                <span>klik = otwórz teczkę</span>
+              </div>
               <div class="zob-folder-scroll" id="zob-folder-list"></div>
             </aside>
             <section class="zob-folder-open ${detailOpen ? '' : 'collapsed'}" id="zob-detail-pane">
@@ -994,6 +1105,11 @@ const ZobowiazaniModule = (() => {
     return { cls: 'todo', label: 'Do zrobienia' };
   }
 
+  function sortMark(key) {
+    if (sortCol !== key) return '';
+    return `<span class="sort-ind">${sortDir > 0 ? '▲' : '▼'}</span>`;
+  }
+
   function renderTableOnly() {
     const list = document.getElementById('zob-folder-list');
     if (!list || !dbSheet) return;
@@ -1001,7 +1117,7 @@ const ZobowiazaniModule = (() => {
     const visibleRows = getFilteredRows();
 
     if (!visibleRows.length) {
-      list.innerHTML = `<div class="zob-folder-empty">Brak teczek spełniających wybrane kryteria</div>`;
+      list.innerHTML = `<div class="zob-folder-empty">Brak osób spełniających wybrane kryteria</div>`;
       return;
     }
 
@@ -1009,15 +1125,15 @@ const ZobowiazaniModule = (() => {
       selectedRowIndex = visibleRows[0].idx;
     }
 
-    let html = '';
-    visibleRows.forEach((item) => {
+    let body = '';
+    visibleRows.forEach((item, displayIdx) => {
       const r = item.row;
       const ri = item.idx;
       const info = extractPersonInfo(r);
       const isSelected = ri === selectedRowIndex;
       const sysCount = getPersonSysCount(r);
-      const cepik = getCepikForPerson(info);
       const st = statusMeta(sysCount);
+      const defer = getDeferInfo(r);
 
       let dots = '';
       REG_SYSTEMS.forEach(sys => {
@@ -1025,31 +1141,45 @@ const ZobowiazaniModule = (() => {
         const sysVal = sysIdx >= 0 ? String(r[sysIdx] || '').trim() : '';
         const isDone = sysVal !== '' && sysVal.toLowerCase() !== 'pomiń';
         const isSkip = sysVal.toLowerCase() === 'pomiń';
-        dots += `<span class="zob-dot ${isDone ? 'on' : ''}${isSkip ? ' skip' : ''}" title="${sys}"></span>`;
+        dots += `<span class="zob-dot ${isDone ? 'on' : ''}${isSkip ? ' skip' : ''}" title="${sys}: ${escapeHtml(sysVal || 'brak')}"></span>`;
       });
 
-      html += `
-        <button type="button" class="zob-teczka ${isSelected ? 'is-selected' : ''}" onclick="ZobowiazaniModule.select(${ri})" aria-pressed="${isSelected}">
-          <span class="zob-teczka-spine" aria-hidden="true"></span>
-          <span class="zob-teczka-body">
-            <span class="zob-teczka-name" title="${escapeHtml(info.name)}">${escapeHtml(info.name)}</span>
-            <span class="zob-teczka-meta">
-              ${info.pesel ? `<span class="zob-teczka-id">${escapeHtml(info.pesel)}</span>` : ''}
-              ${info.nip ? `<span class="zob-teczka-id">NIP ${escapeHtml(info.nip)}</span>` : ''}
-              ${cepik ? `<span class="zob-teczka-cepik">${cepik.vehicles.length} poj.</span>` : ''}
-            </span>
-            <span class="zob-teczka-foot">
-              <span class="zob-teczka-dots">${dots}</span>
-              <span class="zob-status-chip ${st.cls}">${st.label}</span>
-            </span>
-          </span>
-        </button>
+      const idLine = [info.pesel, info.nip ? `NIP ${info.nip}` : ''].filter(Boolean).join(' · ');
+      const deferChip = defer
+        ? `<span class="zob-defer-chip ${defer.due ? 'due' : 'wait'}" title="Odłożone — wróć ${escapeHtml(defer.raw)}">${defer.due ? 'Do powrotu' : 'Na później'} ${escapeHtml(defer.raw)}</span>`
+        : '';
+
+      body += `
+        <tr class="${isSelected ? 'is-selected' : ''}" onclick="ZobowiazaniModule.select(${ri})">
+          <td style="width:36px;color:var(--zob-ink-soft);font-size:.72rem">${displayIdx + 1}</td>
+          <td>
+            <div class="zob-reg-name" title="${escapeHtml(info.name)}">${escapeHtml(info.name)}</div>
+            ${idLine ? `<div class="zob-reg-ids">${escapeHtml(idLine)}</div>` : ''}
+            ${deferChip}
+          </td>
+          <td>
+            <div class="zob-reg-sys">${dots}<span class="zob-reg-sys-count">${sysCount}/5</span></div>
+          </td>
+          <td style="text-align:center"><span class="zob-status-chip ${st.cls}">${st.label}</span></td>
+        </tr>
       `;
     });
 
-    list.innerHTML = html;
+    list.innerHTML = `
+      <table class="zob-reg-table">
+        <thead>
+          <tr>
+            <th style="width:36px" onclick="ZobowiazaniModule.sortBy('idx')" class="${sortCol === 'idx' ? 'is-sorted' : ''}">#${sortMark('idx')}</th>
+            <th onclick="ZobowiazaniModule.sortBy('name')" class="${sortCol === 'name' ? 'is-sorted' : ''}">Osoba / PESEL${sortMark('name')}</th>
+            <th onclick="ZobowiazaniModule.sortBy('stan')" class="${sortCol === 'stan' ? 'is-sorted' : ''}" style="width:120px">Systemy${sortMark('stan')}</th>
+            <th onclick="ZobowiazaniModule.sortBy('stan')" class="${sortCol === 'stan' ? 'is-sorted' : ''}" style="width:100px;text-align:center">Stan${sortMark('stan')}</th>
+          </tr>
+        </thead>
+        <tbody>${body}</tbody>
+      </table>
+    `;
 
-    const selectedEl = list.querySelector('.zob-teczka.is-selected');
+    const selectedEl = list.querySelector('tr.is-selected');
     if (selectedEl) {
       selectedEl.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
     }
@@ -1090,6 +1220,7 @@ const ZobowiazaniModule = (() => {
     const curVisIdx = visibleRows.findIndex(item => item.idx === selectedRowIndex);
     const cepik = getCepikForPerson(info);
     const st = statusMeta(sysCount);
+    const defer = getDeferInfo(r);
     const animKey = ++folderAnimToken;
 
     const tabs = [
@@ -1099,10 +1230,29 @@ const ZobowiazaniModule = (() => {
       { id: 'notatka', label: 'Notatka' },
     ];
 
+    const deferBanner = defer
+      ? `<div class="zob-defer-banner ${defer.due ? 'due' : 'wait'}">
+           ${defer.due ? 'Przypomnienie aktywne — wróć' : 'Odłożone — wróć'} <strong>${escapeHtml(defer.raw)}</strong>
+           <button type="button" class="zob-nav-btn" style="margin-left:auto;height:28px;padding:0 10px" onclick="ZobowiazaniModule.clearDefer(${selectedRowIndex})">Zdejmij</button>
+         </div>`
+      : '';
+
     let bodyHtml = '';
 
     if (detailTab === 'dane') {
       bodyHtml = `
+        ${deferBanner}
+        <div class="zob-sheet">
+          <div class="zob-sheet-title"><span>Odłóż / przypomnienie</span></div>
+          <div class="zob-defer-actions">
+            <button type="button" class="zob-action-btn" onclick="ZobowiazaniModule.deferDays(${selectedRowIndex}, 1)">+1 dzień</button>
+            <button type="button" class="zob-action-btn" onclick="ZobowiazaniModule.deferDays(${selectedRowIndex}, 3)">+3 dni</button>
+            <button type="button" class="zob-action-btn" onclick="ZobowiazaniModule.deferDays(${selectedRowIndex}, 7)">+7 dni</button>
+            <button type="button" class="zob-action-btn primary" onclick="ZobowiazaniModule.deferPick(${selectedRowIndex})">Wybierz datę</button>
+            ${defer ? `<button type="button" class="zob-action-btn" onclick="ZobowiazaniModule.clearDefer(${selectedRowIndex})">Wyczyść</button>` : ''}
+          </div>
+          <p class="zob-mod-sub" style="margin:0">Zapisuje się w kolumnie <strong>Wróć</strong> w bazie Arkusza — widać też na liście i w filtrach.</p>
+        </div>
         <div class="zob-sheet">
           <div class="zob-sheet-title"><span>Dane identyfikacyjne</span><span>Kliknij, by skopiować</span></div>
           ${info.pesel ? `<div class="zob-id-row"><span class="zob-id-label">PESEL</span><span class="zob-badge-mono" onclick="ZobowiazaniModule.copy('${info.pesel}', this)">${info.pesel}</span></div>` : ''}
@@ -1115,7 +1265,7 @@ const ZobowiazaniModule = (() => {
           <div class="zob-sheet-title"><span>Pozostałe pola z Arkusza</span></div>
           <div class="zob-kv-grid">
             ${dbSheet.columns.map((colName, cIdx) => {
-              if (REG_SYSTEMS.includes(colName) || colName === 'Stan' || colName === 'Komplet') return '';
+              if (REG_SYSTEMS.includes(colName) || colName === 'Stan' || colName === 'Komplet' || colName === DEFER_COL) return '';
               const rawVal = String(r[cIdx] || '').trim();
               if (!rawVal) return '';
               const isLong = rawVal.length > 25;
@@ -1191,14 +1341,18 @@ const ZobowiazaniModule = (() => {
       <div class="zob-open-header" data-anim="${animKey}">
         <div>
           <div class="zob-open-title">${escapeHtml(info.name)}</div>
-          <div class="zob-open-sub">Teczka #${selectedRowIndex + 1} · <span class="zob-status-chip ${st.cls}">${st.label}</span> · ${sysCount}/5 systemów</div>
+          <div class="zob-open-sub">Teczka #${selectedRowIndex + 1} · <span class="zob-status-chip ${st.cls}">${st.label}</span> · ${sysCount}/5 systemów${defer ? ` · <span class="zob-defer-chip ${defer.due ? 'due' : 'wait'}">${defer.due ? 'Do powrotu' : 'Na później'} ${escapeHtml(defer.raw)}</span>` : ''}</div>
         </div>
-        <button class="zob-btn-komplet" onclick="ZobowiazaniModule.setAll(${selectedRowIndex})" title="Oznacz komplet">Komplet</button>
+        <div class="zob-open-header-actions">
+          <button type="button" class="zob-action-btn" onclick="ZobowiazaniModule.deferDays(${selectedRowIndex}, 3)" title="Odłóż o 3 dni">Odłóż +3</button>
+          <button class="zob-btn-komplet" onclick="ZobowiazaniModule.setAll(${selectedRowIndex})" title="Oznacz komplet">Komplet</button>
+        </div>
       </div>
       <div class="zob-open-tabs">
         ${tabs.map(t => `<button type="button" class="zob-tab ${detailTab === t.id ? 'active' : ''}" onclick="ZobowiazaniModule.setTab('${t.id}')">${t.label}</button>`).join('')}
       </div>
       <div class="zob-open-body" key="${detailTab}-${animKey}">
+        ${detailTab !== 'dane' ? deferBanner : ''}
         ${bodyHtml}
       </div>
       <div class="zob-open-footer">
@@ -1373,7 +1527,10 @@ const ZobowiazaniModule = (() => {
     copyCleanExcel: copyCleanExcelText,
     copy: copyToClipboard,
     loadJsonFile: triggerFilePicker,
-    refreshFromArkusz
+    refreshFromArkusz,
+    deferDays: deferByDays,
+    deferPick: deferPickDate,
+    clearDefer
   };
 
 })();
