@@ -366,14 +366,15 @@ table.grid{border-collapse:separate;border-spacing:0;width:max-content;min-width
       <span class="sep"></span>
       <button class="btn sm" id="btnSyncToBase" type="button" title="Przenieś oznaczenia z listy do bazy Zobowiązanych (tryb Z bazą). Osoby spoza bazy → dialog.">Synchronizuj z bazą</button>
       <button class="btn sm" id="btnAddToBase" type="button" title="Porównaj listę z bazą i dodaj tylko brakujące osoby (nie rusza istniejących)">Dodaj do bazy</button>
-      <button class="btn sm" id="btnSetKeyCol" type="button" title="Ręcznie wskaż kolumnę z PESEL/NIP na tej liście (gdy automatyczne wykrywanie nie działa)">Ustaw kolumnę klucza</button>
-      <button class="btn sm" id="btnRegDossier" type="button" title="Kartoteka: Zobowiązani + Na później">Kartoteka</button>
-      <button class="btn sm" id="btnRegGuard" type="button" title="Oznacz na liście osoby już obróbione w bazie (komplet / częściowo / archiwum)">Wyłącz duplikaty</button>
+      <button class="btn sm" id="btnSetKeyCol" type="button" title="Gdy lista nie wykrywa PESEL/NIP automatycznie — wskaż ręcznie, która kolumna to identyfikator osoby">Która kolumna = PESEL?</button>
+      <button class="btn sm" id="btnRegDossier" type="button" title="Szybki podgląd: co o osobie jest w Zobowiązanych i na parkingu Na później">Podgląd osoby</button>
+      <button class="btn sm" id="btnRegGuard" type="button" title="Na liście raportu podświetla osoby, które już mają czynność w bazie — żeby nie robić drugi raz">Oznacz już obróbione</button>
       <span class="sep"></span>
-      <button class="btn sm" id="btnParkDefer" type="button" title="Zapisz zaznaczone wiersze z bieżącej listy do parkingu Na później (przeżyją zamknięcie listy)">Odłóż zaznaczone</button>
-      <button class="btn sm" id="btnParkOpen" type="button" title="Otwórz kartę Na później">Na później</button>
-      <button class="btn sm" id="btnParkShowPerson" type="button" title="Pokaż odłożone rzeczy dla zaznaczonej osoby (PESEL)">Pokaż odłożone</button>
-      <button class="btn sm" id="btnParkDone" type="button" title="Oznacz zaznaczone w Na później jako zrobione">Oznacz zrobione</button>
+      <span class="ribbon-label" title="Parking spraw do powrotu później">Odkładanie:</span>
+      <button class="btn sm" id="btnParkDefer" type="button" title="Zaznaczone wiersze z listy → karta «Na później» (pamiętaj wrócić)">Odłóż na później</button>
+      <button class="btn sm" id="btnParkOpen" type="button" title="Lista spraw odłożonych — tu wracasz">Lista Na później</button>
+      <button class="btn sm" id="btnParkShowPerson" type="button" title="Pokaż tylko odłożone sprawy zaznaczonej osoby">Odłożone tej osoby</button>
+      <button class="btn sm" id="btnParkDone" type="button" title="Na karcie Na później: zaznaczone = załatwione, zdejmij z parkingu">Zrobione ✓</button>
       <span class="sep"></span>
       <select class="btn sm" id="regFilterSelect" title="Filtruj według stanu">
         <option value="">Filtr stanu…</option>
@@ -1104,11 +1105,13 @@ function runAutosave(){
     const data=buildAutosavePayload();
     localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(data));
     App._autosavedAt=data.savedAt;
-    try{
-      if(window.parent && window.parent!==window){
-        window.parent.postMessage({ type:'EGZE_DB_UPDATED', savedAt:data.savedAt }, '*');
-      }
-    }catch(_){}
+    if(!App._skipParentNotify){
+      try{
+        if(window.parent && window.parent!==window){
+          window.parent.postMessage({ type:'EGZE_DB_UPDATED', savedAt:data.savedAt }, '*');
+        }
+      }catch(_){}
+    }
   }catch(err){
     if(!App._autosaveWarned){ App._autosaveWarned=true; toast('Autosave: brak miejsca w localStorage — użyj Zapisz JSON'); }
   }
@@ -5065,8 +5068,12 @@ function saveWorkbook(){
   download(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}), safe+'.ots.json');
   toast('Zapisano skoroszyt JSON');
 }
-function loadWorkbookData(data){
-  if(!data||!Array.isArray(data.sheets)||!data.sheets.length){ toast('Błędny plik skoroszytu'); return false; }
+function loadWorkbookData(data, opts){
+  opts=opts||{};
+  if(!data||!Array.isArray(data.sheets)||!data.sheets.length){
+    if(!opts.silent) toast('Błędny plik skoroszytu');
+    return false;
+  }
   App.workbook=data.workbook||'Skoroszyt bez nazwy';
   $('wbTitle').value=App.workbook;
   App.wrap=!!data.wrap; App.center=!!data.center; App.plain=!!data.plain;
@@ -5095,8 +5102,8 @@ function loadWorkbookData(data){
   App.undoStack=[]; App.activeCell=null; App.findCursor={r:0,c:0};
   const ash=active(); if(ash) $('filterInput').value=ash.filter||'';
   render();
-  toast('Wczytano skoroszyt ('+App.sheets.length+' kart)');
-  scheduleAutosave();
+  if(!opts.silent) toast('Wczytano skoroszyt ('+App.sheets.length+' kart)');
+  if(!opts.skipAutosave) scheduleAutosave();
   return true;
 }
 async function loadWorkbookFromFile(file){
@@ -5617,19 +5624,42 @@ renderSwatches(); fillRegSysMenu(); setRibbonTab(App.ribbonTab||'dane'); render(
 
 window.addEventListener('message', (e) => {
   if (e.data && e.data.type === 'GET_DB') {
+    // Bez powiadamiania rodzica — inaczej pętla sync ↔ autosave
+    const prevSkip=App._skipParentNotify;
+    App._skipParentNotify=true;
     try { runAutosave(); } catch(_){}
+    App._skipParentNotify=prevSkip;
     const raw = localStorage.getItem(AUTOSAVE_KEY);
     window.parent.postMessage({ type: 'DB_DATA', payload: raw }, '*');
   } else if (e.data && e.data.type === 'SET_DB') {
-    localStorage.setItem(AUTOSAVE_KEY, e.data.payload);
-    window.onbeforeunload = null; 
-    location.reload();
+    try {
+      const payload = e.data.payload;
+      if (!payload) return;
+      localStorage.setItem(AUTOSAVE_KEY, payload);
+      const data = JSON.parse(payload);
+      App._skipParentNotify = true;
+      const ok = loadWorkbookData(data, { silent: true, skipAutosave: true });
+      App._skipParentNotify = false;
+      if (!ok) {
+        window.onbeforeunload = null;
+        location.reload();
+      }
+    } catch (_) {
+      try { localStorage.setItem(AUTOSAVE_KEY, e.data.payload); } catch(__){}
+      window.onbeforeunload = null;
+      location.reload();
+    }
   } else if (e.data && e.data.type === 'ENSURE_REGISTRY') {
+    const before = App.sheets.length;
     ensureRegistrySheet(!!e.data.switchTo);
-    scheduleAutosave();
     renderSheetBar();
-    render();
-    window.parent.postMessage({ type:'EGZE_DB_UPDATED', savedAt: App._autosavedAt||null }, '*');
+    // Bez EGZE_DB_UPDATED — unikamy pętli z Szafką teczek
+    if (App.sheets.length !== before) {
+      const prevSkip=App._skipParentNotify;
+      App._skipParentNotify=true;
+      try { runAutosave(); } catch(_){}
+      App._skipParentNotify=prevSkip;
+    }
   }
 });
 })();

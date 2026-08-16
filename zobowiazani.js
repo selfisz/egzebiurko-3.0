@@ -164,7 +164,13 @@ const ZobowiazaniModule = (() => {
   }
 
   /* ─── SYNCHRONIZACJA Z ARKUSZEM / PLIKIEM ──────────────── */
-  async function fetchDbFromArkusz(timeoutMs = 2500) {
+  let _syncTimer = null;
+  let _suppressSyncUntil = 0;
+  let _syncInFlight = false;
+  let _lastSyncedAt = '';
+  let _ensureRegistryOnce = false;
+
+  async function fetchDbFromArkusz(timeoutMs = 2500, opts = {}) {
     if (typeof ArkuszModule !== 'undefined') {
       ArkuszModule.ensureIframe();
     }
@@ -174,21 +180,23 @@ const ZobowiazaniModule = (() => {
       throw new Error('Iframe arkusz-frame nie istnieje lub brak dostępu.');
     }
 
-    // Poczekaj aż iframe będzie gotowy
     if (!frame.contentWindow) {
       await new Promise((resolve, reject) => {
         const t = setTimeout(() => reject(new Error('Timeout ładowania Arkusza')), Math.min(timeoutMs, 5000));
         frame.addEventListener('load', () => { clearTimeout(t); resolve(); }, { once: true });
       });
     } else {
-      await new Promise(r => setTimeout(r, 250));
+      await new Promise(r => setTimeout(r, 80));
     }
 
-    // Upewnij się, że w Arkuszu istnieje karta Zobowiązani (tryb Z bazą)
-    try {
-      frame.contentWindow.postMessage({ type: 'ENSURE_REGISTRY', switchTo: false }, '*');
-      await new Promise(r => setTimeout(r, 100));
-    } catch {}
+    // ENSURE_REGISTRY tylko raz / na żądanie — nie przy każdym odświeżeniu (pętla + miganie)
+    if (opts.ensureRegistry || !_ensureRegistryOnce) {
+      try {
+        frame.contentWindow.postMessage({ type: 'ENSURE_REGISTRY', switchTo: false }, '*');
+        _ensureRegistryOnce = true;
+        await new Promise(r => setTimeout(r, 60));
+      } catch {}
+    }
 
     const raw = await new Promise((resolve, reject) => {
       let intervalId;
@@ -219,15 +227,15 @@ const ZobowiazaniModule = (() => {
     if (!selectBestSheet(parsed)) {
       throw new Error('Arkusz nie zawiera arkusza z danymi');
     }
+    _lastSyncedAt = parsed.savedAt || '';
     return true;
   }
 
   async function loadDataAsync() {
     dbErrorMsg = '';
 
-    // 1) Żywe dane z Arkusza (priorytet — synchronizacja z trybem „Z bazą”)
     try {
-      await fetchDbFromArkusz();
+      await fetchDbFromArkusz(2500, { ensureRegistry: true });
       dataSourceLabel = 'Arkusz';
       try { localStorage.removeItem(FILE_SOURCE_KEY); } catch {}
       persistLocal();
@@ -237,7 +245,6 @@ const ZobowiazaniModule = (() => {
       dbErrorMsg = e.toString();
     }
 
-    // 2) Fallback: lokalna kopia / wcześniej wczytany JSON
     try {
       const raw = localStorage.getItem(AUTOSAVE_KEY);
       if (raw) {
@@ -254,14 +261,24 @@ const ZobowiazaniModule = (() => {
     return false;
   }
 
-  let _syncTimer = null;
-  function scheduleSyncFromArkusz() {
+  function scheduleSyncFromArkusz(reason) {
     if (!activated) return;
+    if (Date.now() < _suppressSyncUntil) return;
+    if (_syncInFlight) return;
+
     clearTimeout(_syncTimer);
     _syncTimer = setTimeout(async () => {
+      if (Date.now() < _suppressSyncUntil) return;
+      if (_syncInFlight) return;
+      _syncInFlight = true;
       try {
         const prevIdx = selectedRowIndex;
-        await fetchDbFromArkusz(2000);
+        const prevAt = _lastSyncedAt;
+        await fetchDbFromArkusz(2000, { ensureRegistry: false });
+        // Ten sam snapshot — nie przerysowuj (miganie)
+        if (prevAt && _lastSyncedAt && prevAt === _lastSyncedAt && reason !== 'force') {
+          return;
+        }
         dataSourceLabel = 'Arkusz';
         if (dbSheet && prevIdx >= 0 && prevIdx < dbSheet.rows.length) {
           selectedRowIndex = prevIdx;
@@ -270,8 +287,10 @@ const ZobowiazaniModule = (() => {
         updatePillsBar();
       } catch (e) {
         console.warn('[ZobowiazaniModule] sync refresh failed:', e);
+      } finally {
+        _syncInFlight = false;
       }
-    }, 400);
+    }, 600);
   }
 
   function bindArkuszSyncListeners() {
@@ -280,14 +299,21 @@ const ZobowiazaniModule = (() => {
 
     window.addEventListener('message', (e) => {
       if (!e.data) return;
-      if (e.data.type === 'EGZE_DB_UPDATED' || e.data.type === 'EGZE_WORK_MODE') {
-        scheduleSyncFromArkusz();
+      if (e.data.type === 'EGZE_DB_UPDATED') {
+        // Ignoruj echo własnego zapisu
+        if (Date.now() < _suppressSyncUntil) return;
+        if (e.data.savedAt && e.data.savedAt === _lastSyncedAt) return;
+        scheduleSyncFromArkusz('arkusz');
+      } else if (e.data.type === 'EGZE_WORK_MODE') {
+        _ensureRegistryOnce = false;
+        scheduleSyncFromArkusz('workmode');
       }
     });
 
-    // Inna karta / okno z tym samym origin
     window.addEventListener('storage', (e) => {
-      if (e.key === AUTOSAVE_KEY) scheduleSyncFromArkusz();
+      if (e.key === AUTOSAVE_KEY && Date.now() >= _suppressSyncUntil) {
+        scheduleSyncFromArkusz('storage');
+      }
     });
   }
 
@@ -457,6 +483,9 @@ const ZobowiazaniModule = (() => {
     if (!dbData || !dbSheet) return;
     try {
       dbData.savedAt = new Date().toISOString();
+      _lastSyncedAt = dbData.savedAt;
+      // Blokuj echo sync na czas zapisu (wcześniej: SET_DB → reload → pusta baza / miganie)
+      _suppressSyncUntil = Date.now() + 2500;
       persistLocal();
       const frame = document.getElementById('arkusz-frame');
       if (frame && frame.contentWindow) {
