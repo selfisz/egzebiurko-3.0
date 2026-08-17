@@ -257,6 +257,82 @@ const WroModule = (() => {
     }
   }
 
+  function computeLoadSummary() {
+    const annots = loadAnnotations();
+    const result = { total: entities.length, withActions: 0, allKnown: 0, partiallyKnown: 0, noAnnotations: 0, noActionSections: 0 };
+
+    entities.forEach(({ id }) => {
+      const data = bazaDanych[id];
+      if (!data) return;
+      const fromTbls = idsFromWroTables(data);
+      const a3 = String(data._meta?.a3 || '').replace(/\D/g, '') || fromTbls.nip;
+      const b3 = String(data._meta?.b3 || '').replace(/\D/g, '') || fromTbls.pesel;
+      const pk = (b3 || a3 || String(id)).replace(/\D/g, '') || String(id);
+
+      const actionSrcs = Object.keys(data).filter(k => k.startsWith('Wynik:') && Array.isArray(data[k]) && data[k].length > 1);
+      if (!actionSrcs.length) { result.noActionSections++; return; }
+
+      result.withActions++;
+      let todo = 0, known = 0;
+      actionSrcs.forEach(src => {
+        const rows = data[src];
+        const safe = src.replace(/[^a-zA-Z0-9]/g, '');
+        for (let r = 1; r < rows.length; r++) {
+          const fp = rows[r].slice(0, 5).map(v => String(v || '')).join('||');
+          const ann = annots[buildAnnotKey(pk, safe, fp)];
+          if (ann && (ann.status === 'done' || ann.status === 'excluded')) known++;
+          else todo++;
+        }
+      });
+
+      if (known === 0) result.noAnnotations++;
+      else if (todo === 0) result.allKnown++;
+      else result.partiallyKnown++;
+    });
+    return result;
+  }
+
+  function showLoadSummaryDialog(summary) {
+    let dlg = document.getElementById('wro-load-dlg');
+    if (!dlg) {
+      dlg = document.createElement('div');
+      dlg.id = 'wro-load-dlg';
+      document.body.appendChild(dlg);
+    }
+    const { total, withActions, allKnown, partiallyKnown, noAnnotations, noActionSections } = summary;
+    const hasAnyAnnot = allKnown + partiallyKnown > 0;
+
+    dlg.innerHTML = `
+      <div class="wro-ldlg-overlay" onclick="document.getElementById('wro-load-dlg').style.display='none'">
+        <div class="wro-ldlg-box" onclick="event.stopPropagation()">
+          <div class="wro-ldlg-title">📊 Podsumowanie wczytanego pliku</div>
+          <div class="wro-ldlg-grid">
+            <div class="wro-ldlg-card">
+              <div class="wro-ldlg-num">${total}</div>
+              <div class="wro-ldlg-lbl">podmiotów łącznie</div>
+            </div>
+            <div class="wro-ldlg-card wro-ldlg-todo">
+              <div class="wro-ldlg-num">${noAnnotations}</div>
+              <div class="wro-ldlg-lbl">📋 do przejrzenia</div>
+            </div>
+            <div class="wro-ldlg-card wro-ldlg-partial">
+              <div class="wro-ldlg-num">${partiallyKnown}</div>
+              <div class="wro-ldlg-lbl">⚡ częściowo znane</div>
+            </div>
+            <div class="wro-ldlg-card wro-ldlg-done">
+              <div class="wro-ldlg-num">${allKnown}</div>
+              <div class="wro-ldlg-lbl">✅ wszystkie znane</div>
+            </div>
+          </div>
+          ${noActionSections > 0 ? `<div class="wro-ldlg-note">${noActionSections} podmiotów bez sekcji wynikowych (OGNIVO/AUM/JPK)</div>` : ''}
+          ${!hasAnyAnnot ? `<div class="wro-ldlg-note wro-ldlg-first">ℹ️ Brak zapisanych adnotacji — to pierwsze wczytanie lub nowe urządzenie. Oznaczaj wpisy statusami aby przy kolejnym wczytaniu system pokazał delta.</div>` : ''}
+          <button class="wro-ldlg-close" onclick="document.getElementById('wro-load-dlg').style.display='none'">Zamknij</button>
+        </div>
+      </div>
+    `;
+    dlg.style.display = 'block';
+  }
+
   function handleFileLoad(e) {
     const file = e.target.files[0];
     if (!file) return;
@@ -274,6 +350,7 @@ const WroModule = (() => {
         renderList('');
         showContent('<div class="wro-empty-state"><div class="wro-empty-card"><div class="wro-empty-icon">✅</div><h3>Baza załadowana</h3><p>Załadowano ' + entities.length + ' podmiotów. Wybierz podmiot z listy.</p></div></div>');
         showToast('✅ Wczytano bazę WRO: ' + entities.length + ' podmiotów', 'success');
+        showLoadSummaryDialog(computeLoadSummary());
       } catch(err) {
         showToast('❌ Błąd pliku bazy danych!', 'error');
       }

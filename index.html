@@ -771,6 +771,38 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
   background:var(--panel2);margin-left:6px;
 }
 
+/* ── Load summary dialog ── */
+#wro-load-dlg{display:none;position:fixed;inset:0;z-index:10000}
+.wro-ldlg-overlay{
+  position:absolute;inset:0;background:rgba(0,0,0,.45);
+  display:flex;align-items:center;justify-content:center;
+}
+.wro-ldlg-box{
+  background:var(--panel);border-radius:14px;padding:28px;
+  box-shadow:0 20px 60px rgba(0,0,0,.25);max-width:480px;width:90%;
+}
+.wro-ldlg-title{font-size:1.1rem;font-weight:700;color:var(--text);margin-bottom:20px}
+.wro-ldlg-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-bottom:16px}
+.wro-ldlg-card{
+  background:var(--panel2);border-radius:10px;padding:14px;
+  border:1px solid var(--line);text-align:center;
+}
+.wro-ldlg-todo{border-color:#fca5a5;background:#fff5f5}
+.wro-ldlg-partial{border-color:#fde68a;background:#fffbeb}
+.wro-ldlg-done{border-color:#86efac;background:#f0fdf4}
+.wro-ldlg-num{font-size:2rem;font-weight:800;color:var(--text);line-height:1}
+.wro-ldlg-lbl{font-size:.78rem;color:var(--muted);margin-top:4px}
+.wro-ldlg-note{
+  font-size:.8rem;color:var(--muted);text-align:center;
+  padding:8px 12px;background:var(--zebra);border-radius:6px;margin-bottom:12px;
+}
+.wro-ldlg-first{color:var(--accent)}
+.wro-ldlg-close{
+  width:100%;padding:10px;background:var(--accent);color:#fff;
+  border:none;border-radius:8px;font-size:.9rem;font-weight:600;cursor:pointer;
+}
+.wro-ldlg-close:hover{background:var(--accentHover,#2563eb)}
+
 /* ═══════════════════════════════════════════════
    ZOBOWIĄZANI — Szafka teczek (kartoteka)
    ═══════════════════════════════════════════════ */
