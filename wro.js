@@ -14,6 +14,9 @@ const WroModule = (() => {
   let activeFilters = new Set();
   let currentActiveId = null;
   let activated   = false;
+  let _currentAnnotBid = null;
+  const _annotBtnCtx = {};
+  let _annotBtnSeq = 0;
 
   const icons = {
     "Raporter":"📊","STIR":"🏦","Księgi Wieczyste":"🏢",
@@ -33,6 +36,42 @@ const WroModule = (() => {
   function setAnalyzed(s) { SharedStore.set('wro_analyzed_status', [...s]); }
   function getCart()     { return new Set(SharedStore.get('wro_cart_status', [])); }
   function setCart(s)    { SharedStore.set('wro_cart_status', [...s]); SharedStore.set(SharedStore.KEYS.WRO_CART, [...s]); }
+
+  /* ─── ADNOTACJE NA WYNIKACH ─────────────────────────────── */
+  const ANNOT_LS_KEY = 'egze3_wro_annotations';
+
+  function loadAnnotations() {
+    try { return JSON.parse(localStorage.getItem(ANNOT_LS_KEY) || '{}'); } catch { return {}; }
+  }
+  function saveAnnotations(obj) {
+    localStorage.setItem(ANNOT_LS_KEY, JSON.stringify(obj));
+  }
+  function buildAnnotKey(pk, sec, iid) {
+    return pk + '|' + sec + '|' + iid;
+  }
+  function getAnnotation(pk, sec, iid) {
+    return loadAnnotations()[buildAnnotKey(pk, sec, iid)] || null;
+  }
+  function setAnnotationData(pk, sec, iid, data) {
+    const all = loadAnnotations();
+    const k = buildAnnotKey(pk, sec, iid);
+    if (data) all[k] = { ...data, updatedAt: new Date().toISOString().slice(0, 10) };
+    else delete all[k];
+    saveAnnotations(all);
+  }
+  function annotChipHtml(annot, pk, sec, iid) {
+    const bid = 'ab' + (++_annotBtnSeq);
+    _annotBtnCtx[bid] = { pk, sec, iid };
+    let label, cls;
+    if (!annot || !annot.status || annot.status === 'todo') {
+      label = '📋 Do zajęcia'; cls = 'wro-annot-todo';
+    } else if (annot.status === 'done') {
+      label = '✅ Zrobione' + (annot.updatedAt ? ' · ' + annot.updatedAt : ''); cls = 'wro-annot-done';
+    } else {
+      label = '⛔ Wykluczone' + (annot.reason ? ' · ' + escWro(annot.reason) : ''); cls = 'wro-annot-excl';
+    }
+    return `<button class="wro-annot-btn ${cls}" id="${bid}" onclick="WroModule.openAnnotPopover(event,'${bid}')" title="Kliknij aby ustawić status wpisu">${label}</button>`;
+  }
 
   /* ─── GŁÓWNY RENDER ─────────────────────────────────────── */
   function render() {
@@ -104,6 +143,18 @@ const WroModule = (() => {
     if (fi) fi.addEventListener('change', handleFileLoad);
     if (pi) pi.addEventListener('change', handleProgressLoad);
     if (srch) srch.addEventListener('input', e => renderList(e.target.value));
+
+    if (!document._wroAnnotListenerAttached) {
+      document._wroAnnotListenerAttached = true;
+      document.addEventListener('click', e => {
+        const pop = document.getElementById('wro-annot-pop');
+        if (pop && pop.style.display !== 'none') {
+          if (!pop.contains(e.target) && !e.target.classList.contains('wro-annot-btn')) {
+            pop.style.display = 'none';
+          }
+        }
+      }, true);
+    }
   }
 
   function escWro(s) {
@@ -243,6 +294,10 @@ const WroModule = (() => {
         if (obj.cart)     obj.cart.forEach(id => cart.add(id));
         setAnalyzed(analyzed);
         setCart(cart);
+        if (obj.annotations && typeof obj.annotations === 'object') {
+          const existing = loadAnnotations();
+          saveAnnotations({ ...existing, ...obj.annotations });
+        }
         updateCartCounter();
         renderList(document.getElementById('wro-search')?.value || '');
         showToast('✅ Postęp wczytany', 'success');
@@ -306,6 +361,7 @@ const WroModule = (() => {
       const stubMark = view.stub ? '<span class="wro-stub-chip" title="Tylko OGNIVO/AUM — brak raportu WRO">bez WRO</span>' : '';
       const fromArk = view.person ? '<span class="wro-stub-chip ark" title="Dopasowano z Arkusza">teczka</span>' : '';
 
+      const folderIco = `<span class="wro-icon-jump wro-open-teczka" data-entity="${escWro(item.id)}" data-open-teczka="1" title="${view.person ? 'Otwórz teczkę w Szafce' : 'Szukaj teczki w Szafce'}">📂</span>`;
       const statusBadges = (inCart ? '🛒 ' : '') + (isAnalyzed ? '✅' : '');
       const iconsHtml = item.availableSources.map(s => {
         const safe = s.replace(/[^a-zA-Z0-9]/g,'');
@@ -319,7 +375,7 @@ const WroModule = (() => {
             <span title="${escWro(item.id)}">${escWro(view.displayName)}</span>
             <span>${statusBadges}${stubMark}${fromArk}</span>
           </div>
-          <div class="wro-list-score">Dane: ${iconsHtml}</div>
+          <div class="wro-list-score">${folderIco} ${iconsHtml}</div>
         </div>
       `;
     }).join('');
@@ -335,6 +391,10 @@ const WroModule = (() => {
       el.addEventListener('click', ev => {
         ev.stopPropagation();
         const id = el.dataset.entity;
+        if (el.dataset.openTeczka) {
+          openInSzafka(id);
+          return;
+        }
         const sec = el.dataset.section;
         selectEntity(id, sec);
       });
@@ -354,6 +414,10 @@ const WroModule = (() => {
     const data = bazaDanych[id];
     if (!data) return;
 
+    // Reset annotation button context for fresh render
+    for (const k in _annotBtnCtx) delete _annotBtnCtx[k];
+    _annotBtnSeq = 0;
+
     const analyzed  = getAnalyzed();
     const cart      = getCart();
     const isAnalyzed = analyzed.has(id);
@@ -363,6 +427,7 @@ const WroModule = (() => {
     const a3       = data._meta?.a3 || '';
     const b3       = data._meta?.b3 || '';
     const view     = resolveEntityView(id);
+    const personKey = (b3 || a3 || String(id)).replace(/\D/g, '') || String(id);
 
     // Pobierz wyniki OGNIVO z SharedStore dla tej osoby
     const ognivoData  = SharedStore.get(SharedStore.KEYS.OGNIVO, {});
@@ -414,7 +479,9 @@ const WroModule = (() => {
               onclick="WroModule.toggleCart('${String(id).replace(/'/g, "\\'")}')">
               ${inCart ? '❌ Usuń z koszyka' : '🛒 Dodaj do koszyka'}
             </button>
-            ${view.person ? `<button class="wro-btn" onclick="WroModule.openInSzafka('${String(id).replace(/'/g, "\\'")}')">📂 Otwórz teczkę</button>` : ''}
+            ${view.person
+              ? `<button class="wro-btn" onclick="WroModule.openInSzafka('${String(id).replace(/'/g, "\\'")}')">📂 Otwórz teczkę</button>`
+              : `<button class="wro-btn" onclick="WroModule.openInSzafka('${String(id).replace(/'/g, "\\'")}')">📂 Szukaj teczki</button>`}
           </div>
         </div>
 
@@ -439,7 +506,13 @@ const WroModule = (() => {
         <div class="wro-ognivo-inline">
           <div class="wro-ognivo-title">🏦 Wyniki OGNIVO (z SharedStore)</div>
           <div class="wro-ognivo-banks">
-            ${(ognivoEntry.banks || []).map(b => `<span class="bank-badge">${b}</span>`).join('')}
+            ${(ognivoEntry.banks || []).map(b => {
+              const ann = getAnnotation(personKey, 'OGNIVOStore', b);
+              return `<div class="wro-ognivo-bank-item">
+                <span class="bank-badge ${ann?.status==='excluded'?'badge-annot-excl':ann?.status==='done'?'badge-annot-done':''}">${escWro(b)}</span>
+                ${annotChipHtml(ann, personKey, 'OGNIVOStore', b)}
+              </div>`;
+            }).join('')}
           </div>
           <div class="wro-ognivo-meta">Zapisano: ${ognivoEntry.ts ? new Date(ognivoEntry.ts).toLocaleString('pl') : '—'}</div>
         </div>
@@ -461,16 +534,24 @@ const WroModule = (() => {
             <div class="wro-collapse-icon">▼</div>
           </div>
           <div class="wro-cards-grid">
-            ${Array.from({length: rows.length - 1}, (_, i) => i + 1).map(r => `
-              <div class="wro-card">
-                <div class="wro-card-hdr">Wpis #${r}</div>
+            ${Array.from({length: rows.length - 1}, (_, i) => i + 1).map(r => {
+              const rowFp = rows[r].slice(0, 5).map(v => String(v || '')).join('||');
+              const ann = isAction ? getAnnotation(personKey, safe, rowFp) : null;
+              const cardCls = ann?.status === 'excluded' ? 'wro-card-excl' : ann?.status === 'done' ? 'wro-card-done' : '';
+              return `
+              <div class="wro-card ${cardCls}">
+                <div class="wro-card-hdr">
+                  <span>Wpis #${r}</span>
+                  ${isAction ? annotChipHtml(ann, personKey, safe, rowFp) : ''}
+                </div>
                 ${headers.map((h, c) => {
                   const val = rows[r][c];
-                  const disp = (val && String(val).trim()) ? val : '<span class="wro-empty-val">—</span>';
-                  return `<div class="wro-card-row"><div class="wro-label">${h}</div><div class="wro-value">${disp}</div></div>`;
+                  const dispVal = (val && String(val).trim()) ? val : '<span class="wro-empty-val">—</span>';
+                  return `<div class="wro-card-row"><div class="wro-label">${h}</div><div class="wro-value">${dispVal}</div></div>`;
                 }).join('')}
               </div>
-            `).join('')}
+            `;
+            }).join('')}
           </div>
         </div>
       `;
@@ -611,12 +692,107 @@ const WroModule = (() => {
   }
 
   function exportProgress() {
-    const data = JSON.stringify({ analyzed: [...getAnalyzed()], cart: [...getCart()] });
+    const data = JSON.stringify({
+      analyzed: [...getAnalyzed()],
+      cart: [...getCart()],
+      annotations: loadAnnotations()
+    });
     const blob = new Blob([data], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = `WRO_Postep_${new Date().toISOString().slice(0,10)}.json`;
     a.click();
+  }
+
+  function openAnnotPopover(event, bid) {
+    _currentAnnotBid = bid;
+    const ctx = _annotBtnCtx[bid];
+    if (!ctx) return;
+
+    let pop = document.getElementById('wro-annot-pop');
+    if (!pop) {
+      pop = document.createElement('div');
+      pop.id = 'wro-annot-pop';
+      pop.className = 'wro-annot-pop';
+      document.body.appendChild(pop);
+    }
+
+    const current = getAnnotation(ctx.pk, ctx.sec, ctx.iid);
+    const isTodo = !current || !current.status || current.status === 'todo';
+    const isDone = current?.status === 'done';
+    const isExcl = current?.status === 'excluded';
+
+    pop.innerHTML = `
+      <div class="wro-ap-title">Status wpisu</div>
+      <div class="wro-ap-options">
+        <button class="wro-ap-opt${isTodo ? ' active' : ''}" onclick="WroModule.setAnnotStatus(null)">📋 Do zajęcia (brak statusu)</button>
+        <button class="wro-ap-opt${isDone ? ' active' : ''}" onclick="WroModule.setAnnotStatus('done')">✅ Zrobione</button>
+        <button class="wro-ap-opt${isExcl ? ' active' : ''}" onclick="WroModule.showAnnotExcludeForm()">⛔ Wykluczone…</button>
+      </div>
+      <div id="wro-ap-excl-form" style="display:${isExcl ? 'block' : 'none'}">
+        <div class="wro-ap-label">Powód wykluczenia:</div>
+        <select id="wro-ap-reason-sel" class="wro-ap-sel">
+          <option value="">— wybierz —</option>
+          <option value="Zajęte przez inny organ">Zajęte przez inny organ</option>
+          <option value="Brak salda">Brak salda</option>
+          <option value="Konto zamknięte">Konto zamknięte</option>
+          <option value="Przedawnione">Przedawnione</option>
+          <option value="Inne">Inne</option>
+        </select>
+        <input type="text" id="wro-ap-reason-txt" class="wro-ap-inp" placeholder="lub wpisz własny powód…" value="${isExcl && current.reason ? escWro(current.reason) : ''}">
+        <button class="wro-ap-confirm" onclick="WroModule.setAnnotStatus('excluded')">Zapisz wykluczenie</button>
+      </div>
+      <button class="wro-ap-close-btn" onclick="document.getElementById('wro-annot-pop').style.display='none'">✕ Zamknij</button>
+    `;
+
+    if (isExcl && current.reason) {
+      setTimeout(() => {
+        const sel = document.getElementById('wro-ap-reason-sel');
+        if (sel) {
+          const opt = [...sel.options].find(o => o.value === current.reason);
+          if (opt) sel.value = current.reason;
+        }
+      }, 0);
+    }
+
+    const rect = event.currentTarget.getBoundingClientRect();
+    pop.style.display = 'block';
+    pop.style.top  = (rect.bottom + 4) + 'px';
+    pop.style.left = Math.max(4, Math.min(rect.left, window.innerWidth - 280)) + 'px';
+    event.stopPropagation();
+  }
+
+  function showAnnotExcludeForm() {
+    const form = document.getElementById('wro-ap-excl-form');
+    if (form) form.style.display = 'block';
+  }
+
+  function setAnnotStatus(status) {
+    if (!_currentAnnotBid) return;
+    const ctx = _annotBtnCtx[_currentAnnotBid];
+    if (!ctx) return;
+
+    let data = null;
+    if (status === 'done') {
+      data = { status: 'done' };
+    } else if (status === 'excluded') {
+      const sel = document.getElementById('wro-ap-reason-sel');
+      const txt = document.getElementById('wro-ap-reason-txt');
+      const reason = (txt && txt.value.trim()) || (sel && sel.value !== '' ? sel.value : '') || '';
+      data = { status: 'excluded', reason };
+    }
+
+    setAnnotationData(ctx.pk, ctx.sec, ctx.iid, data);
+
+    const pop = document.getElementById('wro-annot-pop');
+    if (pop) pop.style.display = 'none';
+
+    if (currentActiveId) renderEntityContent(currentActiveId, null);
+    showToast(
+      status === 'done' ? '✅ Oznaczono jako zrobione' :
+      status === 'excluded' ? '⛔ Oznaczono jako wykluczone' :
+      '📋 Status usunięty', 'info'
+    );
   }
 
   function exportMatrixCSV() {
@@ -641,18 +817,112 @@ const WroModule = (() => {
   function expandAll()   { document.querySelectorAll('.wro-source-block').forEach(el => el.classList.remove('collapsed')); }
   function collapseAll() { document.querySelectorAll('.wro-source-block').forEach(el => el.classList.add('collapsed')); }
 
+  function digitsId(v) {
+    return String(v || '').replace(/\D/g, '');
+  }
+
+  function findEntityKey(pesel, nip, name) {
+    const db = bazaDanych || window.WroDatabase;
+    if (!db) return null;
+    const tries = [pesel, nip, digitsId(pesel), digitsId(nip)].filter(Boolean);
+    for (const t of tries) {
+      if (db[t]) return t;
+    }
+    const want = new Set(tries.map(digitsId).filter(d => d.length >= 10));
+    const nameLc = String(name || '').trim().toLowerCase();
+    const keys = Object.keys(db);
+    for (let i = 0; i < keys.length; i++) {
+      const k = keys[i];
+      const ent = db[k];
+      if (!ent) continue;
+      const meta = ent._meta || {};
+      const a3 = digitsId(meta.a3);
+      const b3 = digitsId(meta.b3);
+      if ((a3 && want.has(a3)) || (b3 && want.has(b3)) || want.has(digitsId(k))) return k;
+      if (nameLc && String(k).trim().toLowerCase() === nameLc) return k;
+    }
+    return null;
+  }
+
+  function sourcePreview(src, rows) {
+    const n = Math.max(0, (rows || []).length - 1);
+    if (!n) return null;
+    const headers = rows[0] || [];
+    let idx = headers.findIndex(h => /bank|nazwa|adres|nieruch|rachun|iban|marka|vin|kwota|opis|kw\b/i.test(String(h || '')));
+    if (idx < 0) {
+      idx = headers.findIndex((_, c) => rows.slice(1).some(r => String(r[c] || '').trim()));
+    }
+    if (idx < 0) idx = 0;
+    const vals = [];
+    for (let i = 1; i < rows.length; i++) {
+      const v = String(rows[i][idx] || '').trim();
+      if (v && !vals.includes(v)) vals.push(v);
+    }
+    return {
+      count: n,
+      line: vals.slice(0, 3).join(' · ') + (vals.length > 3 ? '…' : '')
+    };
+  }
+
+  function getAssetSummaryForPerson(pesel, nip, name) {
+    const entityId = findEntityKey(pesel, nip, name);
+    const items = [];
+    const order = [
+      ['Wynik: OGNIVO', 'OGNIVO', '🏦'],
+      ['Wynik: AUM', 'AUM', '🎯'],
+      ['STIR', 'STIR', '🏦'],
+      ['Księgi Wieczyste', 'Księgi wieczyste', '🏢'],
+      ['Dochody', 'Dochody', '💰'],
+      ['Przychód', 'Przychód', '📈'],
+      ['UFG CEPIK', 'Pojazdy', '🚗'],
+      ['Kontrahenci: SPRZEDAŻ', 'Sprzedaż', '🛒'],
+      ['Kontrahenci: ZAKUP', 'Zakup', '🛍️'],
+      ['Wynik: JPK', 'JPK', '⚡'],
+      ['Raporter', 'Raporter', '📊'],
+      ['CRCM', 'CRCM', '📋'],
+    ];
+    const data = entityId ? (bazaDanych[entityId] || null) : null;
+    if (data) {
+      order.forEach(([key, label, icon]) => {
+        const rows = data[key];
+        if (!rows || rows.length <= 1) return;
+        const prev = sourcePreview(key, rows);
+        if (!prev) return;
+        items.push({
+          key, label, icon,
+          count: prev.count,
+          line: prev.line,
+          section: key.replace(/[^a-zA-Z0-9]/g, '')
+        });
+      });
+    }
+    try {
+      const ognivoData = SharedStore.get(SharedStore.KEYS.OGNIVO, {});
+      const entry = ognivoData[pesel] || ognivoData[nip] || ognivoData[digitsId(pesel)] || ognivoData[digitsId(nip)] || (entityId && ognivoData[entityId]);
+      if (entry && Array.isArray(entry.banks) && entry.banks.length && !items.some(i => i.key === 'Wynik: OGNIVO')) {
+        items.unshift({
+          key: 'Wynik: OGNIVO', label: 'OGNIVO', icon: '🏦',
+          count: entry.banks.length,
+          line: entry.banks.join(' · '),
+          section: 'WynikOGNIVO'
+        });
+      }
+    } catch {}
+    return { found: !!data || items.length > 0, entityId, items };
+  }
+
   function activate(params = {}) {
     if (!activated) { activated = true; }
     tryLoadPersistedBaza();
     render();
 
-    // Jeśli wywołano z Arkusza z konkretną osobą — aktywuj ją
     if (params.pesel || params.nip) {
-      const id = params.pesel || params.nip;
+      const id = findEntityKey(params.pesel, params.nip) || params.pesel || params.nip;
       if (bazaDanych[id]) {
-        setTimeout(() => selectEntity(id), 100);
+        const sec = params.section ? String(params.section).replace(/[^a-zA-Z0-9]/g, '') : null;
+        setTimeout(() => selectEntity(id, sec), 100);
       } else {
-        showToast(`ℹ️ Brak "${id}" w bazie WRO — wczytaj plik bazy`, 'info');
+        showToast('ℹ️ Brak tej osoby w bazie WRO — wczytaj plik bazy', 'info');
       }
     }
   }
@@ -819,7 +1089,9 @@ const WroModule = (() => {
     toggleStatus, toggleCart, updateCartCounter,
     renderCart, clearCart, exportProgress, exportMatrixCSV,
     expandAll, collapseAll,
-    getCepikInfoForId, getBazaDanych, importBazaDanych, openInSzafka
+    getCepikInfoForId, getAssetSummaryForPerson, findEntityKey,
+    getBazaDanych, importBazaDanych, openInSzafka,
+    openAnnotPopover, showAnnotExcludeForm, setAnnotStatus
   };
 })();
 
