@@ -751,6 +751,26 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
 .bank-badge.badge-annot-done{background:#dcfce7;color:#166534;border-color:#86efac}
 .bank-badge.badge-annot-excl{background:#fee2e2;color:#991b1b;border-color:#fca5a5;text-decoration:line-through;opacity:.8}
 
+/* ── Delta / known items ── */
+.wro-known-hidden{display:none!important}
+.wro-known-toggle{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:8px 16px;cursor:pointer;font-size:.8rem;color:var(--muted);
+  background:var(--zebra);border-top:1px solid var(--line);
+  user-select:none;
+}
+.wro-known-toggle:hover{background:var(--soft);color:var(--text)}
+.wro-known-toggle.expanded .wro-known-arrow{transform:rotate(90deg)}
+.wro-known-arrow{transition:transform .2s;font-size:.7rem}
+.wro-all-known{
+  padding:16px;text-align:center;color:var(--ok);font-size:.82rem;
+  font-style:italic;grid-column:1/-1;
+}
+.wro-sec-badge{
+  font-size:.72rem;font-weight:600;padding:2px 8px;border-radius:999px;
+  background:var(--panel2);margin-left:6px;
+}
+
 /* ═══════════════════════════════════════════════
    ZOBOWIĄZANI — Szafka teczek (kartoteka)
    ═══════════════════════════════════════════════ */

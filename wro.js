@@ -502,18 +502,38 @@ const WroModule = (() => {
 
     // OGNIVO wyniki inline jeśli dostępne
     if (ognivoEntry) {
+      const allBanks = (ognivoEntry.banks || []);
+      const todoBanks = allBanks.filter(b => { const a = getAnnotation(personKey,'OGNIVOStore',b); return !a || !a.status || a.status==='todo'; });
+      const knownBanks = allBanks.filter(b => { const a = getAnnotation(personKey,'OGNIVOStore',b); return a && (a.status==='done'||a.status==='excluded'); });
+      const ogBadge = knownBanks.length > 0
+        ? `<span class="wro-sec-badge" style="${todoBanks.length===0?'color:#16a34a':'color:#dc2626'}">${todoBanks.length > 0 ? todoBanks.length+' do zajęcia · ' : ''}${knownBanks.length} znane</span>`
+        : '';
       html += `
         <div class="wro-ognivo-inline">
-          <div class="wro-ognivo-title">🏦 Wyniki OGNIVO (z SharedStore)</div>
+          <div class="wro-ognivo-title">🏦 Wyniki OGNIVO (z SharedStore) ${ogBadge}</div>
           <div class="wro-ognivo-banks">
-            ${(ognivoEntry.banks || []).map(b => {
+            ${todoBanks.map(b => {
               const ann = getAnnotation(personKey, 'OGNIVOStore', b);
               return `<div class="wro-ognivo-bank-item">
-                <span class="bank-badge ${ann?.status==='excluded'?'badge-annot-excl':ann?.status==='done'?'badge-annot-done':''}">${escWro(b)}</span>
+                <span class="bank-badge">${escWro(b)}</span>
                 ${annotChipHtml(ann, personKey, 'OGNIVOStore', b)}
               </div>`;
             }).join('')}
+            ${todoBanks.length === 0 && knownBanks.length > 0 ? '<div class="wro-all-known" style="font-size:.8rem">✅ Wszystkie banki oznaczone jako znane</div>' : ''}
           </div>
+          ${knownBanks.length > 0 ? `
+          <div class="wro-known-toggle" onclick="(function(el){const g=el.nextElementSibling;g.classList.toggle('wro-known-hidden');el.classList.toggle('expanded');el.querySelector('.wro-known-arrow').textContent=g.classList.contains('wro-known-hidden')?'▶':'▼'})(this)">
+            <span>👁 Pokaż znane banki (${knownBanks.length})</span><span class="wro-known-arrow">▶</span>
+          </div>
+          <div class="wro-ognivo-banks wro-known-hidden">
+            ${knownBanks.map(b => {
+              const ann = getAnnotation(personKey, 'OGNIVOStore', b);
+              return `<div class="wro-ognivo-bank-item">
+                <span class="bank-badge ${ann?.status==='excluded'?'badge-annot-excl':'badge-annot-done'}">${escWro(b)}</span>
+                ${annotChipHtml(ann, personKey, 'OGNIVOStore', b)}
+              </div>`;
+            }).join('')}
+          </div>` : ''}
           <div class="wro-ognivo-meta">Zapisano: ${ognivoEntry.ts ? new Date(ognivoEntry.ts).toLocaleString('pl') : '—'}</div>
         </div>
       `;
@@ -527,32 +547,61 @@ const WroModule = (() => {
       const disp = src.replace('Wynik: ','Akcja: ');
       const headers = rows[0];
 
+      const todoCards = [];
+      const knownCards = [];
+
+      Array.from({length: rows.length - 1}, (_, i) => i + 1).forEach(r => {
+        const rowFp = rows[r].slice(0, 5).map(v => String(v || '')).join('||');
+        const ann = isAction ? getAnnotation(personKey, safe, rowFp) : null;
+        const cardCls = ann?.status === 'excluded' ? 'wro-card-excl' : ann?.status === 'done' ? 'wro-card-done' : '';
+        const cardHtml = `
+          <div class="wro-card ${cardCls}">
+            <div class="wro-card-hdr">
+              <span>Wpis #${r}</span>
+              ${isAction ? annotChipHtml(ann, personKey, safe, rowFp) : ''}
+            </div>
+            ${headers.map((h, c) => {
+              const val = rows[r][c];
+              const dispVal = (val && String(val).trim()) ? val : '<span class="wro-empty-val">—</span>';
+              return `<div class="wro-card-row"><div class="wro-label">${h}</div><div class="wro-value">${dispVal}</div></div>`;
+            }).join('')}
+          </div>
+        `;
+        if (isAction && ann && (ann.status === 'done' || ann.status === 'excluded')) {
+          knownCards.push(cardHtml);
+        } else {
+          todoCards.push(cardHtml);
+        }
+      });
+
+      const secStatusBadge = isAction ? (() => {
+        const t = todoCards.length, k = knownCards.length;
+        if (k === 0) return '';
+        const col = t === 0 ? 'color:#16a34a' : 'color:#dc2626';
+        return `<span class="wro-sec-badge" style="${col}">${t > 0 ? t + ' do zajęcia · ' : ''}${k} znane</span>`;
+      })() : '';
+
+      const knownSection = isAction && knownCards.length > 0 ? `
+        <div class="wro-known-toggle" onclick="(function(el){const g=el.nextElementSibling;g.classList.toggle('wro-known-hidden');el.classList.toggle('expanded');el.querySelector('.wro-known-arrow').textContent=g.classList.contains('wro-known-hidden')?'▶':'▼'})(this)">
+          <span>👁 Pokaż znane (${knownCards.length})</span><span class="wro-known-arrow">▶</span>
+        </div>
+        <div class="wro-cards-grid wro-known-hidden">
+          ${knownCards.join('')}
+        </div>
+      ` : '';
+
       html += `
         <div class="wro-source-block ${isAction ? 'wro-action-block' : ''}" id="wro-sec-${safe}">
           <div class="wro-source-title" onclick="this.closest('.wro-source-block').classList.toggle('collapsed')">
-            <div class="wro-title-left">${icons[src]||'📄'} ${disp}</div>
+            <div class="wro-title-left">${icons[src]||'📄'} ${disp} ${secStatusBadge}</div>
             <div class="wro-collapse-icon">▼</div>
           </div>
           <div class="wro-cards-grid">
-            ${Array.from({length: rows.length - 1}, (_, i) => i + 1).map(r => {
-              const rowFp = rows[r].slice(0, 5).map(v => String(v || '')).join('||');
-              const ann = isAction ? getAnnotation(personKey, safe, rowFp) : null;
-              const cardCls = ann?.status === 'excluded' ? 'wro-card-excl' : ann?.status === 'done' ? 'wro-card-done' : '';
-              return `
-              <div class="wro-card ${cardCls}">
-                <div class="wro-card-hdr">
-                  <span>Wpis #${r}</span>
-                  ${isAction ? annotChipHtml(ann, personKey, safe, rowFp) : ''}
-                </div>
-                ${headers.map((h, c) => {
-                  const val = rows[r][c];
-                  const dispVal = (val && String(val).trim()) ? val : '<span class="wro-empty-val">—</span>';
-                  return `<div class="wro-card-row"><div class="wro-label">${h}</div><div class="wro-value">${dispVal}</div></div>`;
-                }).join('')}
-              </div>
-            `;
-            }).join('')}
+            ${todoCards.join('')}
+            ${todoCards.length === 0 && knownCards.length > 0
+              ? `<div class="wro-all-known">✅ Wszystkie wpisy w tej sekcji oznaczone jako znane — kliknij poniżej aby zobaczyć</div>` : ''}
           </div>
+          ${knownSection}
         </div>
       `;
     });
