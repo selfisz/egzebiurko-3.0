@@ -17,6 +17,7 @@ const WroModule = (() => {
   let _currentAnnotBid = null;
   const _annotBtnCtx = {};
   let _annotBtnSeq = 0;
+  let minDochodFilter = 0;
 
   const icons = {
     "Raporter":"📊","STIR":"🏦","Księgi Wieczyste":"🏢",
@@ -59,6 +60,44 @@ const WroModule = (() => {
     else delete all[k];
     saveAnnotations(all);
   }
+  /* ─── DOCHODY FILTER ────────────────────────────────────── */
+  function parsePolishNum(v) {
+    const s = String(v || '').trim().replace(/\s/g, '').replace(',', '.');
+    const n = parseFloat(s.replace(/[^0-9.\-]/g, ''));
+    return isNaN(n) ? 0 : n;
+  }
+
+  function getMaxDochodForEntity(id) {
+    const data = bazaDanych[id];
+    if (!data) return 0;
+    const rows = data['Dochody'];
+    if (!rows || rows.length < 2) return 0;
+    const headers = (rows[0] || []).map(h => String(h || '').toLowerCase());
+    const dochIdx = headers.findIndex(h => /doch[oó]d|income/i.test(h));
+    let max = 0;
+    for (let r = 1; r < rows.length; r++) {
+      let val = 0;
+      if (dochIdx >= 0) {
+        val = parsePolishNum(rows[r][dochIdx]);
+      } else {
+        val = (rows[r] || []).slice(1).map(v => parsePolishNum(v)).filter(n => n > 0 && n < 100000000).reduce((a, b) => Math.max(a, b), 0);
+      }
+      if (val > max) max = val;
+    }
+    return max;
+  }
+
+  function setMinDochod(val) {
+    minDochodFilter = val;
+    const inp = document.getElementById('wro-min-dochod');
+    if (inp) inp.value = val || '';
+    renderList(document.getElementById('wro-search')?.value || '');
+  }
+
+  function formatPln(n) {
+    return n >= 1000 ? (n / 1000).toFixed(0) + ' tys.' : n.toFixed(0);
+  }
+
   function annotChipHtml(annot, pk, sec, iid) {
     const bid = 'ab' + (++_annotBtnSeq);
     _annotBtnCtx[bid] = { pk, sec, iid };
@@ -105,6 +144,20 @@ const WroModule = (() => {
             <input type="text" class="wro-search" id="wro-search" placeholder="Szukaj (nazwa, NIP, PESEL)...">
 
             <div class="wro-filters" id="wro-filters"></div>
+
+            <div class="wro-dochod-filter">
+              <div class="wro-dochod-label">💰 Min. dochód roczny (PLN)</div>
+              <div class="wro-dochod-row">
+                <input type="number" id="wro-min-dochod" class="wro-dochod-inp" placeholder="np. 60000" min="0" step="1000">
+                <button class="wro-dochod-clear" onclick="WroModule.setMinDochod(0)" title="Wyczyść filtr">✕</button>
+              </div>
+              <div class="wro-dochod-presets">
+                <button onclick="WroModule.setMinDochod(30000)">30k</button>
+                <button onclick="WroModule.setMinDochod(60000)">60k</button>
+                <button onclick="WroModule.setMinDochod(100000)">100k</button>
+                <button onclick="WroModule.setMinDochod(200000)">200k</button>
+              </div>
+            </div>
           </div>
 
           <div class="wro-list" id="wro-list">
@@ -143,6 +196,12 @@ const WroModule = (() => {
     if (fi) fi.addEventListener('change', handleFileLoad);
     if (pi) pi.addEventListener('change', handleProgressLoad);
     if (srch) srch.addEventListener('input', e => renderList(e.target.value));
+
+    const dochInp = document.getElementById('wro-min-dochod');
+    if (dochInp) dochInp.addEventListener('input', e => {
+      minDochodFilter = parseFloat(e.target.value) || 0;
+      renderList(document.getElementById('wro-search')?.value || '');
+    });
 
     if (!document._wroAnnotListenerAttached) {
       document._wroAnnotListenerAttached = true;
@@ -427,7 +486,8 @@ const WroModule = (() => {
           if (!item.availableSources.includes(req)) { matchFilters = false; break; }
         }
       }
-      return matchText && matchFilters;
+      const matchDochod = !minDochodFilter || getMaxDochodForEntity(item.id) >= minDochodFilter;
+      return matchText && matchFilters && matchDochod;
     });
 
     listEl.innerHTML = filtered.map(item => {
@@ -440,6 +500,10 @@ const WroModule = (() => {
 
       const folderIco = `<span class="wro-icon-jump wro-open-teczka" data-entity="${escWro(item.id)}" data-open-teczka="1" title="${view.person ? 'Otwórz teczkę w Szafce' : 'Szukaj teczki w Szafce'}">📂</span>`;
       const statusBadges = (inCart ? '🛒 ' : '') + (isAnalyzed ? '✅' : '');
+      const maxDochod = item.availableSources.includes('Dochody') ? getMaxDochodForEntity(item.id) : 0;
+      const dochodBadge = maxDochod > 0
+        ? `<span class="wro-dochod-badge${maxDochod >= 60000 ? ' high' : ''}" title="Maks. dochód roczny z PIT">💰 ${formatPln(maxDochod)}</span>`
+        : '';
       const iconsHtml = item.availableSources.map(s => {
         const safe = s.replace(/[^a-zA-Z0-9]/g,'');
         const style = s.startsWith('Wynik:') ? 'color:#ef4444;font-weight:bold;' : '';
@@ -450,7 +514,7 @@ const WroModule = (() => {
         <div class="wro-list-item ${isAnalyzed ? 'is-analyzed' : ''} ${isActive ? 'active' : ''} ${view.stub ? 'is-stub' : ''}" data-id="${escWro(item.id)}">
           <div class="wro-list-title">
             <span title="${escWro(item.id)}">${escWro(view.displayName)}</span>
-            <span>${statusBadges}${stubMark}${fromArk}</span>
+            <span>${statusBadges}${dochodBadge}${stubMark}${fromArk}</span>
           </div>
           <div class="wro-list-score">${folderIco} ${iconsHtml}</div>
         </div>
@@ -1217,7 +1281,8 @@ const WroModule = (() => {
     expandAll, collapseAll,
     getCepikInfoForId, getAssetSummaryForPerson, findEntityKey,
     getBazaDanych, importBazaDanych, openInSzafka,
-    openAnnotPopover, showAnnotExcludeForm, setAnnotStatus
+    openAnnotPopover, showAnnotExcludeForm, setAnnotStatus,
+    setMinDochod
   };
 })();
 
