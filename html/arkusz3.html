@@ -534,7 +534,7 @@ const PARK_SHEET='Na później';
 const REG_CYCLE_DAYS=100;
 const REG_SYSTEMS=['KAWA','SINF','UFG','JPK','INFZ'];
 const REG_NA='Pomiń';
-const REG_META=['Stan','Komplet','Źródła','Notatka'];
+const REG_META=['Stan','Komplet','Zawieszone','Źródła','Notatka'];
 const META_TEXT_COL_W=140;
 function foldPl(s){
   return String(s==null?'':s).replace(/\u00a0/g,' ').trim().toLowerCase()
@@ -622,6 +622,38 @@ const REG_STATUS_COLOR={
   'Zawieszone':'brown'
 };
 const isSuspendedStan=v=>/^zawiesz/i.test(norm(v));
+function todayPl(){
+  const d=new Date();
+  return String(d.getDate()).padStart(2,'0')+'.'+String(d.getMonth()+1).padStart(2,'0')+'.'+d.getFullYear();
+}
+function zawieszoneVal(sh, row){
+  if(!sh||!row) return '';
+  const ci=findSystemCol(sh,'Zawieszone');
+  if(ci>=0 && norm(row[ci])) return norm(row[ci]);
+  const sci=findSystemCol(sh,'Stan');
+  if(sci>=0 && isSuspendedStan(row[sci])) return norm(row[sci]);
+  return '';
+}
+function persistZawieszoneShared(reg){
+  try{
+    const SS=window.parent && window.parent!==window ? window.parent.SharedStore : (typeof SharedStore!=='undefined'?SharedStore:null);
+    if(!SS || !SS.KEYS || !SS.KEYS.ZAWIESZONE) return;
+    const zawCi=findSystemCol(reg,'Zawieszone');
+    const pci=findSystemCol(reg,'PESEL');
+    const nci=findSystemCol(reg,'NIP');
+    const map={};
+    const at=new Date().toISOString();
+    (reg.rows||[]).forEach(row=>{
+      if(!zawieszoneVal(reg, row)) return;
+      const pesel=pci>=0?String(row[pci]||'').replace(/\D/g,''):'';
+      const nip=nci>=0?String(row[nci]||'').replace(/\D/g,''):'';
+      const rec={at, name:''};
+      if(pesel) map[pesel]=rec;
+      if(nip) map[nip]=rec;
+    });
+    SS.set(SS.KEYS.ZAWIESZONE, map);
+  }catch(_){}
+}
 const $=id=>document.getElementById(id);
 
 const uid=()=>'s'+Math.random().toString(36).slice(2,9);
@@ -2042,6 +2074,10 @@ function afterSystemCellEdit(sh, ri, ci){
   const isSys=REG_SYSTEMS.some(n=>findSystemCol(sh,n)===ci);
   if(!isSys){
     if(isRegistrySheet(sh)) refreshRegistryDerived(sh);
+    else if(findSystemCol(sh,'Zawieszone')===ci){
+      if(zawieszoneVal(sh, sh.rows[ri])) sh.rowColors[ri]='brown';
+      else delete sh.rowColors[ri];
+    }
     return;
   }
   if(isRegistrySheet(sh)){
@@ -2056,11 +2092,13 @@ function afterSystemCellEdit(sh, ri, ci){
     return sci>=0?(sh.rows[ri][sci]||''):'';
   });
   const {stan,komplet}=computePersonStatus(dates);
-  if(stanCi>=0 && !isSuspendedStan(sh.rows[ri][stanCi])) sh.rows[ri][stanCi]=stan;
+  if(stanCi>=0) sh.rows[ri][stanCi]=stan;
   if(kompCi>=0) sh.rows[ri][kompCi]=komplet;
-  const outStan=stanCi>=0?sh.rows[ri][stanCi]:stan;
-  const color=REG_STATUS_COLOR[outStan]||REG_STATUS_COLOR[stan];
-  if(color) sh.rowColors[ri]=color; else delete sh.rowColors[ri];
+  if(zawieszoneVal(sh, sh.rows[ri])) sh.rowColors[ri]='brown';
+  else{
+    const color=REG_STATUS_COLOR[stan];
+    if(color) sh.rowColors[ri]=color; else delete sh.rowColors[ri];
+  }
 
   // Tryb Z bazą: wpis (np. nr auta w UFG) od razu do Zobowiązanych
   if(App.workMode==='linked'){
@@ -2104,6 +2142,11 @@ function buildRowTr(sh, ri, displayIdx, cols, idxs){
     const label = stObj ? stObj.label : st;
     tr.classList.add('st-c-'+color);
     stBadge = `<span class="badge-st c-${color}" title="${label}">${label.slice(0,1)}</span>`;
+  }
+  const zawRaw=zawieszoneVal(sh, sh.rows[ri]);
+  if(zawRaw){
+    tr.classList.add('rc-brown');
+    stBadge += `<span class="badge-st c-brown" title="Zawieszone ${zawRaw}">Z</span>`;
   }
   const ctd=document.createElement('td'); ctd.className='corner';
   ctd.innerHTML=`<div class="th-inner" style="justify-content:center;gap:4px"><input type="checkbox" ${sh.selected.has(ri)?'checked':''}><span title="Nr w widoku (po sortowaniu)">${displayIdx+1}</span>${stBadge}</div>`; tr.append(ctd);
@@ -3612,23 +3655,31 @@ function refreshRegistryDerived(reg){
   if(!reg) return;
   const sysIdx=REG_SYSTEMS.map(n=>findSystemCol(reg,n)).filter(i=>i>=0);
   const stanCi=findSystemCol(reg,'Stan'), kompCi=findSystemCol(reg,'Komplet');
+  const zawCi=findSystemCol(reg,'Zawieszone');
   // Kolumna „liczba dni bezczynności” — datę bierzemy WYŁĄCZNIE z INFZ (format rrrr-mm-dd)
   const inactCi=reg.columns.findIndex(c=>isInactivityCol(c));
   const infzCi=findSystemCol(reg,'INFZ');
   const todayD=parseISODate(todayISO());
-  if(stanCi<0 && inactCi<0) return;
+  if(stanCi<0 && inactCi<0 && zawCi<0) return;
   reg.rows.forEach((row,ri)=>{
+    padSheetRow(reg, ri);
+    if(zawCi>=0 && stanCi>=0 && isSuspendedStan(row[stanCi]) && !norm(row[zawCi])){
+      row[zawCi]=todayPl();
+      row[stanCi]='';
+    }
     if(stanCi>=0){
-      if(isSuspendedStan(row[stanCi])){
+      const dates=sysIdx.map(ci=>row[ci]||'');
+      const {stan,komplet}=computePersonStatus(dates);
+      row[stanCi]=stan;
+      if(kompCi>=0) row[kompCi]=komplet;
+      if(zawieszoneVal(reg, row)){
         reg.rowColors[ri]='brown';
       }else{
-        const dates=sysIdx.map(ci=>row[ci]||'');
-        const {stan,komplet}=computePersonStatus(dates);
-        row[stanCi]=stan;
-        if(kompCi>=0) row[kompCi]=komplet;
         const color=REG_STATUS_COLOR[stan];
         if(color) reg.rowColors[ri]=color; else delete reg.rowColors[ri];
       }
+    }else if(zawieszoneVal(reg, row)){
+      reg.rowColors[ri]='brown';
     }
     if(inactCi>=0){
       let out='';
@@ -3645,6 +3696,7 @@ function refreshRegistryDerived(reg){
       row[inactCi]=out;
     }
   });
+  persistZawieszoneShared(reg);
 }
 /** Kolumny tożsamości w bazie: nazwane PESEL/NIP + ręcznie ustawiony klucz (_keyColCache). */
 function registryIdentityCols(reg){
@@ -3933,13 +3985,17 @@ function enrichActiveFromRegistry(){
     }
     const dates=REG_SYSTEMS.map(n=>{ const ci=rmap[n]; return ci!=null?(reg.rows[dest][ci]||''):''; });
     const {stan,komplet}=computePersonStatus(dates);
-    const regStan=rmap.Stan!=null?norm(reg.rows[dest][rmap.Stan]):'';
-    const outStan=isSuspendedStan(regStan)?regStan:stan;
-    row[stanCi]=outStan;
+    const zawCiList=ensureCol(sh,'Zawieszone',110);
+    const zaw=rmap.Zawieszone!=null?norm(reg.rows[dest][rmap.Zawieszone]):'';
+    if(zawCiList>=0) row[zawCiList]=zaw;
+    row[stanCi]=stan;
     if(kompCi>=0) row[kompCi]=komplet;
-    const color=REG_STATUS_COLOR[outStan];
-    if(color) sh.rowColors[ri]=color; else delete sh.rowColors[ri];
-    if(isSuspendedStan(outStan)) { /* osobny status, nie licz w todo */ }
+    if(zaw) sh.rowColors[ri]='brown';
+    else{
+      const color=REG_STATUS_COLOR[stan];
+      if(color) sh.rowColors[ri]=color; else delete sh.rowColors[ri];
+    }
+    if(zaw) { /* zawieszone — osobno od todo */ }
     else if(stan===REG_STATUS.todo) counts.todo++;
     else if(stan===REG_STATUS.partial) counts.partial++;
     else if(stan===REG_STATUS.overdue) counts.overdue++;
@@ -4354,12 +4410,17 @@ function syncListToRegistry(){
       return rci!=null?(reg.rows[dest][rci]||''):'';
     });
     const {stan,komplet}=computePersonStatus(dates);
-    const regStanCi=findSystemCol(reg,'Stan');
-    const regStan=regStanCi>=0?norm(reg.rows[dest][regStanCi]):'';
-    if(stanOut>=0) sh.rows[ri][stanOut]=isSuspendedStan(regStan)?regStan:stan;
+    const zawOut=ensureCol(sh,'Zawieszone',110);
+    const regZawCi=findSystemCol(reg,'Zawieszone');
+    const zaw=regZawCi>=0?norm(reg.rows[dest][regZawCi]):'';
+    if(zawOut>=0) sh.rows[ri][zawOut]=zaw;
+    if(stanOut>=0) sh.rows[ri][stanOut]=stan;
     if(kompOut>=0) sh.rows[ri][kompOut]=komplet;
-    const color=REG_STATUS_COLOR[isSuspendedStan(regStan)?regStan:stan];
-    if(color) sh.rowColors[ri]=color;
+    if(zaw) sh.rowColors[ri]='brown';
+    else{
+      const color=REG_STATUS_COLOR[stan];
+      if(color) sh.rowColors[ri]=color;
+    }
   });
 
   // Zostań na aktywnej liście (nie przeskakuj na Zobowiązanych)

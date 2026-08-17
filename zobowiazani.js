@@ -11,6 +11,7 @@ const ZobowiazaniModule = (() => {
   const AUTOSAVE_KEY = 'ots_autosave_v1';
   const REG_SYSTEMS = ['KAWA', 'SINF', 'UFG', 'JPK', 'INFZ'];
   const DEFER_COL = 'Wróć';
+  const SUSPEND_COL = 'Zawieszone';
   const FILE_SOURCE_KEY = 'egze3_zob_file_source';
   const DESK_PINS_KEY = 'egze3_desk_pins';
   const ARCHIVE_IDS_KEY = 'egze3_archive_ids';
@@ -34,7 +35,7 @@ const ZobowiazaniModule = (() => {
   /** @type {{key:string, rowIndex:number, name:string}[]} */
   let openTabs = [];
   let activeTabKey = '';
-  let detailTab = 'dane'; // 'dane' | 'systemy' | 'cepik' | 'notatka'
+  let detailTab = 'dane'; // 'dane' | 'systemy' | 'cepik' | 'majatek' | 'notatka'
   let filtersOpen = false;
   let dbErrorMsg = '';
   let folderAnimToken = 0;
@@ -111,8 +112,18 @@ const ZobowiazaniModule = (() => {
     return ci >= 0 ? String(row[ci] || '').trim() : '';
   }
 
+  function rowZawieszone(row) {
+    if (!dbSheet || !row) return '';
+    const ci = dbSheet.columns.indexOf(SUSPEND_COL);
+    if (ci >= 0) {
+      const v = String(row[ci] || '').trim();
+      if (v) return v;
+    }
+    return /^zawiesz/i.test(rowStan(row)) ? rowStan(row) : '';
+  }
+
   function isSuspendedRow(row) {
-    return /^zawiesz/i.test(rowStan(row));
+    return !!rowZawieszone(row);
   }
 
   function persistZawieszoneStore() {
@@ -510,7 +521,7 @@ const ZobowiazaniModule = (() => {
 
   function ensureSystemColumns(sheet) {
     if (!sheet || !sheet.columns) return;
-    const needed = [...REG_SYSTEMS, 'Stan', 'Komplet', 'Notatka', DEFER_COL];
+    const needed = [...REG_SYSTEMS, 'Stan', 'Komplet', 'Notatka', DEFER_COL, SUSPEND_COL];
     let added = false;
     needed.forEach(colName => {
       if (!sheet.columns.includes(colName)) {
@@ -526,6 +537,21 @@ const ZobowiazaniModule = (() => {
         while (r.length < sheet.columns.length) r.push('');
       });
     }
+    migrateZawieszoneColumn(sheet);
+  }
+
+  function migrateZawieszoneColumn(sheet) {
+    if (!sheet || !sheet.columns) return;
+    const ciStan = sheet.columns.indexOf('Stan');
+    const ciZ = sheet.columns.indexOf(SUSPEND_COL);
+    if (ciStan < 0 || ciZ < 0 || !Array.isArray(sheet.rows)) return;
+    sheet.rows.forEach((r, i) => {
+      while (r.length < sheet.columns.length) r.push('');
+      if (!/^zawiesz/i.test(String(r[ciStan] || ''))) return;
+      if (!String(r[ciZ] || '').trim()) r[ciZ] = getTodayStr();
+      r[ciStan] = '';
+      if (sheet === dbSheet) recalcRowStatus(i, true);
+    });
   }
 
   function formatDatePl(d) {
@@ -679,10 +705,10 @@ const ZobowiazaniModule = (() => {
     return String(d.getDate()).padStart(2, '0') + '.' + String(d.getMonth() + 1).padStart(2, '0') + '.' + d.getFullYear();
   }
 
-  function recalcRowStatus(ri) {
+  function recalcRowStatus(ri, skipEnsure) {
     if (!dbSheet || !dbSheet.columns) return;
     const row = dbSheet.rows[ri];
-    ensureSystemColumns(dbSheet);
+    if (!skipEnsure) ensureSystemColumns(dbSheet);
     while (row.length < dbSheet.columns.length) row.push('');
 
     const ciStan = dbSheet.columns.indexOf('Stan');
@@ -702,7 +728,7 @@ const ZobowiazaniModule = (() => {
       row[ciKomplet] = isComplete ? getTodayStr() : '';
     }
 
-    if (ciStan >= 0 && !/^zawiesz/i.test(String(row[ciStan] || ''))) {
+    if (ciStan >= 0) {
       if (isComplete) row[ciStan] = 'Komplet';
       else if (count > 0) row[ciStan] = 'Częściowo';
       else row[ciStan] = 'Puste';
@@ -850,7 +876,7 @@ const ZobowiazaniModule = (() => {
     if (!name) {
       for (let i = 0; i < cols.length; i++) {
         const cName = String(cols[i] || '').trim();
-        if (REG_SYSTEMS.includes(cName) || ['Stan', 'Komplet', 'LP', 'L.p.', 'Lp', 'ID', 'Notatka', DEFER_COL].includes(cName)) continue;
+        if (REG_SYSTEMS.includes(cName) || ['Stan', 'Komplet', 'LP', 'L.p.', 'Lp', 'ID', 'Notatka', DEFER_COL, SUSPEND_COL].includes(cName)) continue;
         if (/pesel|nip|regon|data|kwota|sygn|stan|komplet|notatk/i.test(cName)) continue;
         
         const val = getColVal(i);
@@ -924,6 +950,46 @@ const ZobowiazaniModule = (() => {
     if (!cepik && info.nip) cepik = WroModule.getCepikInfoForId(info.nip);
     if (!cepik && info.name) cepik = WroModule.getCepikInfoForId(info.name);
     return (cepik && cepik.hasVehicles) ? cepik : null;
+  }
+
+  function renderMajatekHtml(info) {
+    const hasWro = typeof WroModule !== 'undefined';
+    const summary = (hasWro && WroModule.getAssetSummaryForPerson)
+      ? WroModule.getAssetSummaryForPerson(info.pesel, info.nip, info.name)
+      : null;
+    if (!hasWro || !WroModule.getBazaDanych || !Object.keys(WroModule.getBazaDanych() || {}).length) {
+      return `<div class="zob-sheet" style="border-style:dashed">
+        <div class="zob-sheet-title"><span>Majątek z WRO</span></div>
+        <p class="zob-mod-sub" style="margin:0">Najpierw wczytaj bazę w Analityce WRO — tu pojawi się skrót (OGNIVO, AUM, KW, STIR…).</p>
+        <button class="zob-action-btn" style="align-self:flex-start;margin-top:8px" onclick="Router.navigate('wro')">Otwórz Analitykę WRO</button>
+      </div>`;
+    }
+    if (!summary || !summary.found) {
+      return `<div class="zob-sheet" style="border-style:dashed">
+        <div class="zob-sheet-title"><span>Majątek z WRO</span></div>
+        <p class="zob-mod-sub" style="margin:0">Brak tej osoby w wczytanej bazie WRO.</p>
+        <button class="zob-action-btn" style="align-self:flex-start;margin-top:8px" onclick="ZobowiazaniModule.openWro('${escapeHtml(info.pesel || '')}','${escapeHtml(info.nip || '')}','')">Szukaj w WRO</button>
+      </div>`;
+    }
+    const tiles = (summary.items || []).map(it => `
+      <button type="button" class="zob-asset-tile" onclick="ZobowiazaniModule.openWro('${escapeHtml(info.pesel || '')}','${escapeHtml(info.nip || '')}','${escapeHtml(it.section || '')}')">
+        <div class="zob-asset-ico">${it.icon || '📄'}</div>
+        <div class="zob-asset-body">
+          <div class="zob-asset-title">${escapeHtml(it.label)} <span class="zob-asset-n">${it.count}</span></div>
+          <div class="zob-asset-line">${escapeHtml(it.line || 'Kliknij, aby otworzyć w Analityce WRO')}</div>
+        </div>
+        <span class="zob-asset-go">WRO →</span>
+      </button>
+    `).join('');
+    return `<div class="zob-sheet">
+      <div class="zob-sheet-title"><span>Majątek z WRO</span><span>Kliknij kafelek → Analityka WRO</span></div>
+      <div class="zob-asset-list">${tiles || '<p class="zob-mod-sub">Są dane osoby, ale bez sekcji majątku.</p>'}</div>
+    </div>`;
+  }
+
+  function openWroForPerson(pesel, nip, section) {
+    if (typeof Router === 'undefined') return;
+    Router.navigate('wro', { pesel: pesel || '', nip: nip || '', section: section || '' });
   }
 
   function stampUfgIfCar(rowIndex, silent, skipSave) {
@@ -1669,6 +1735,7 @@ const ZobowiazaniModule = (() => {
       { id: 'dane', label: 'Dane' },
       { id: 'systemy', label: 'Systemy' },
       { id: 'cepik', label: 'CEPIK' },
+      { id: 'majatek', label: 'Majątek' },
       { id: 'notatka', label: 'Notatka' },
     ];
 
@@ -1688,7 +1755,7 @@ const ZobowiazaniModule = (() => {
         (info.sygnatura || info.kwota) ? `<div class="zob-id-row"><span class="zob-id-label">Sprawa</span><span class="zob-kv-val">${escapeHtml([info.sygnatura, info.kwota].filter(Boolean).join(' · '))}</span></div>` : '',
       ].filter(Boolean).join('');
 
-      const skipCols = new Set([...REG_SYSTEMS, 'Stan', 'Komplet', DEFER_COL]);
+      const skipCols = new Set([...REG_SYSTEMS, 'Stan', 'Komplet', DEFER_COL, SUSPEND_COL]);
       const otherFields = dbSheet.columns.map((colName, cIdx) => {
         if (skipCols.has(colName)) return '';
         if (/^(pesel|nip|regon)$/i.test(String(colName).trim())) return '';
@@ -1788,6 +1855,8 @@ const ZobowiazaniModule = (() => {
           </div>
         `;
       }
+    } else if (detailTab === 'majatek') {
+      bodyHtml = renderMajatekHtml(info);
     } else {
       bodyHtml = `
         <div class="zob-sheet">
@@ -1806,7 +1875,7 @@ const ZobowiazaniModule = (() => {
             ${info.nip ? `<button type="button" class="zob-id-chip" title="Kopiuj NIP" onclick="ZobowiazaniModule.copy('${info.nip}', this)"><span class="lbl">NIP</span>${info.nip}</button>` : ''}
             ${info.adresStr ? `<button type="button" class="zob-open-addr" title="Kopiuj adres" onclick="ZobowiazaniModule.copy(decodeURIComponent('${encodeURIComponent(info.adresStr)}'), this)">${escapeHtml(info.adresStr)}</button>` : ''}
           </div>` : ''}
-          <div class="zob-open-sub"><span class="zob-status-chip ${st.cls}">${st.label}</span> · ${sysCount}/5 systemów · #${selectedRowIndex + 1}${cepik ? ' · 🚗 CEPIK' : ''}${defer ? ` · <span class="zob-defer-chip ${defer.due ? 'due' : 'wait'}">${defer.due ? 'Do powrotu' : 'Na później'} ${escapeHtml(defer.raw)}</span>` : ''}</div>
+          <div class="zob-open-sub"><span class="zob-status-chip ${st.cls}">${st.label}</span>${rowZawieszone(r) ? ` · od ${escapeHtml(rowZawieszone(r))}` : ''} · ${sysCount}/5 systemów · #${selectedRowIndex + 1}${cepik ? ' · 🚗 CEPIK' : ''}${defer ? ` · <span class="zob-defer-chip ${defer.due ? 'due' : 'wait'}">${defer.due ? 'Do powrotu' : 'Na później'} ${escapeHtml(defer.raw)}</span>` : ''}</div>
         </div>
         <div class="zob-open-header-actions">
           <button type="button" class="zob-pin-btn ${isPinned(pkey) ? 'on' : ''}" onclick="ZobowiazaniModule.togglePin(decodeURIComponent('${encodeURIComponent(pkey)}'))" title="Biurko">${isPinned(pkey) ? '📌 Biurko' : '📍 Biurko'}</button>
@@ -2069,17 +2138,18 @@ const ZobowiazaniModule = (() => {
   function toggleSuspend(ri) {
     if (!dbSheet || !dbSheet.rows[ri]) return;
     ensureSystemColumns(dbSheet);
-    const ci = dbSheet.columns.indexOf('Stan');
+    const ci = dbSheet.columns.indexOf(SUSPEND_COL);
     if (ci < 0) return;
     const r = dbSheet.rows[ri];
     while (r.length < dbSheet.columns.length) r.push('');
     if (isSuspendedRow(r)) {
       r[ci] = '';
       recalcRowStatus(ri);
-      if (typeof showToast === 'function') showToast('Wznowiono sprawę — widać w Arkuszu i WRO', 'success', 2200);
+      if (typeof showToast === 'function') showToast('Wznowiono sprawę — kolumna Zawieszone w Arkuszu wyczyszczona', 'success', 2200);
     } else {
-      r[ci] = 'Zawieszone';
-      if (typeof showToast === 'function') showToast('Sprawa zawieszona — Arkusz + Szafka + WRO', 'info', 2500);
+      r[ci] = getTodayStr();
+      recalcRowStatus(ri);
+      if (typeof showToast === 'function') showToast('Zawieszono — data w kolumnie Zawieszone (Arkusz brązowy)', 'info', 2500);
     }
     saveData();
     renderViews();
@@ -2378,6 +2448,7 @@ const ZobowiazaniModule = (() => {
     lookupById,
     getIdIndex,
     openById,
+    openWro: openWroForPerson,
     copyCleanExcel: copyCleanExcelText,
     copy: copyToClipboard,
     loadJsonFile: triggerFilePicker,
