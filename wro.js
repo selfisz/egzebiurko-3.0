@@ -106,6 +106,63 @@ const WroModule = (() => {
     if (srch) srch.addEventListener('input', e => renderList(e.target.value));
   }
 
+  function escWro(s) {
+    return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function entityHasWroDossier(data) {
+    if (!data) return false;
+    return Object.keys(data).some(k =>
+      k !== '_meta' && !String(k).startsWith('Wynik:') && Array.isArray(data[k]) && data[k].length > 1
+    );
+  }
+
+  function isPlaceholderWroId(id) {
+    return /brak\s*teczk|brak\s*danych|bez\s*nazw|unknown|^n\/?a$/i.test(String(id || ''));
+  }
+
+  function idsFromWroTables(data) {
+    let pesel = '', nip = '';
+    Object.keys(data || {}).forEach(k => {
+      if (k === '_meta') return;
+      const rows = data[k];
+      if (!Array.isArray(rows) || rows.length < 2) return;
+      const headers = rows[0] || [];
+      const pi = headers.findIndex(h => /pesel/i.test(String(h || '')));
+      const ni = headers.findIndex(h => /nip/i.test(String(h || '')));
+      rows.slice(1).forEach(r => {
+        if (!pesel && pi >= 0) {
+          const d = String(r[pi] || '').replace(/\D/g, '');
+          if (d.length === 11) pesel = d;
+        }
+        if (!nip && ni >= 0) {
+          const d = String(r[ni] || '').replace(/\D/g, '');
+          if (d.length === 10) nip = d;
+        }
+      });
+    });
+    return { pesel, nip };
+  }
+
+  function resolveEntityView(id, index) {
+    const data = bazaDanych[id] || {};
+    const fromTables = idsFromWroTables(data);
+    const a3 = String(data._meta?.a3 || '').replace(/\D/g, '') || fromTables.nip;
+    const b3 = String(data._meta?.b3 || '').replace(/\D/g, '') || fromTables.pesel;
+    const idDigits = String(id || '').replace(/\D/g, '');
+    const stub = !entityHasWroDossier(data);
+    const idx = index || ((typeof ZobowiazaniModule !== 'undefined' && typeof ZobowiazaniModule.getIdIndex === 'function')
+      ? ZobowiazaniModule.getIdIndex()
+      : {});
+    const person = idx[b3] || idx[a3] || idx[idDigits] || null;
+    const displayName = (person && person.name)
+      || (!isPlaceholderWroId(id) ? String(id) : '')
+      || (b3 ? ('PESEL ' + b3) : '')
+      || (a3 ? ('NIP ' + a3) : '')
+      || String(id);
+    return { displayName, person, stub, a3, b3 };
+  }
+
   function rebuildEntitiesFromBaza() {
     entities = Object.keys(bazaDanych).map(id => {
       const avail = Object.keys(bazaDanych[id]).filter(k => k !== '_meta' && bazaDanych[id][k].length > 1);
@@ -224,9 +281,14 @@ const WroModule = (() => {
     const analyzed = getAnalyzed();
     const cart     = getCart();
     const lf = filterText.toLowerCase();
+    const arkIndex = (typeof ZobowiazaniModule !== 'undefined' && typeof ZobowiazaniModule.getIdIndex === 'function')
+      ? ZobowiazaniModule.getIdIndex()
+      : {};
 
     const filtered = entities.filter(item => {
-      const matchText = item.id.toLowerCase().includes(lf);
+      const view = resolveEntityView(item.id, arkIndex);
+      const blob = [item.id, view.displayName, view.a3, view.b3, view.person && view.person.name].filter(Boolean).join(' ').toLowerCase();
+      const matchText = !lf || blob.includes(lf);
       let matchFilters = true;
       if (activeFilters.size > 0) {
         for (const req of activeFilters) {
@@ -240,6 +302,9 @@ const WroModule = (() => {
       const isAnalyzed = analyzed.has(item.id);
       const inCart     = cart.has(item.id);
       const isActive   = currentActiveId === item.id;
+      const view = resolveEntityView(item.id, arkIndex);
+      const stubMark = view.stub ? '<span class="wro-stub-chip" title="Tylko OGNIVO/AUM — brak raportu WRO">bez WRO</span>' : '';
+      const fromArk = view.person ? '<span class="wro-stub-chip ark" title="Dopasowano z Arkusza">teczka</span>' : '';
 
       const statusBadges = (inCart ? '🛒 ' : '') + (isAnalyzed ? '✅' : '');
       const iconsHtml = item.availableSources.map(s => {
@@ -249,10 +314,10 @@ const WroModule = (() => {
       }).join('');
 
       return `
-        <div class="wro-list-item ${isAnalyzed ? 'is-analyzed' : ''} ${isActive ? 'active' : ''}" data-id="${item.id}">
+        <div class="wro-list-item ${isAnalyzed ? 'is-analyzed' : ''} ${isActive ? 'active' : ''} ${view.stub ? 'is-stub' : ''}" data-id="${escWro(item.id)}">
           <div class="wro-list-title">
-            <span title="${item.id}">${item.id}</span>
-            <span>${statusBadges}</span>
+            <span title="${escWro(item.id)}">${escWro(view.displayName)}</span>
+            <span>${statusBadges}${stubMark}${fromArk}</span>
           </div>
           <div class="wro-list-score">Dane: ${iconsHtml}</div>
         </div>
@@ -297,10 +362,12 @@ const WroModule = (() => {
     const fileName = data._meta?.plik || 'Nieznany';
     const a3       = data._meta?.a3 || '';
     const b3       = data._meta?.b3 || '';
+    const view     = resolveEntityView(id);
 
     // Pobierz wyniki OGNIVO z SharedStore dla tej osoby
     const ognivoData  = SharedStore.get(SharedStore.KEYS.OGNIVO, {});
-    const ognivoEntry = ognivoData[id] || ognivoData[a3] || ognivoData[b3] || null;
+    const ognivoEntry = ognivoData[id] || ognivoData[a3] || ognivoData[b3]
+      || (view.person && (ognivoData[view.person.pesel] || ognivoData[view.person.nip])) || null;
 
     let validSources = Object.keys(data).filter(k => k !== '_meta' && data[k].length > 1);
     validSources.sort((a, b) => {
@@ -333,17 +400,21 @@ const WroModule = (() => {
         <div class="wro-entity-header">
           <div>
             <h2 class="wro-entity-title">
-              ${id}
+              ${escWro(view.displayName)}
+              ${view.stub ? `<span class="wro-stub-chip" title="W bazie WRO są tylko wyniki OGNIVO/AUM">bez raportu WRO</span>` : ''}
+              ${view.person ? `<span class="wro-stub-chip ark">teczka z Arkusza</span>` : (view.stub ? `<span class="wro-stub-chip" title="PESEL/NIP nie znaleziony w Arkuszu">poza bazą</span>` : '')}
               ${metaBadges ? `<div class="wro-meta-row">${metaBadges}</div>` : ''}
               ${ognivoBadge}
+              ${isZawieszonaWro(id, a3, b3) ? `<span class="wro-ognivo-badge" style="background:#7a5524" title="Sprawa zawieszona w Szafce / Arkuszu">⏸ Zawieszona</span>` : ''}
             </h2>
-            <span class="wro-source-chip">📄 ${fileName}</span>
+            <span class="wro-source-chip">📄 ${escWro(fileName)}${isPlaceholderWroId(id) && id !== view.displayName ? ' · klucz: ' + escWro(id) : ''}</span>
           </div>
           <div class="wro-entity-actions">
             <button class="wro-btn ${inCart ? 'wro-btn-red' : 'wro-btn-orange'}"
-              onclick="WroModule.toggleCart('${id}')">
+              onclick="WroModule.toggleCart('${String(id).replace(/'/g, "\\'")}')">
               ${inCart ? '❌ Usuń z koszyka' : '🛒 Dodaj do koszyka'}
             </button>
+            ${view.person ? `<button class="wro-btn" onclick="WroModule.openInSzafka('${String(id).replace(/'/g, "\\'")}')">📂 Otwórz teczkę</button>` : ''}
           </div>
         </div>
 
@@ -586,6 +657,80 @@ const WroModule = (() => {
     }
   }
 
+  function isZawieszonaWro(id, a3, b3) {
+    try {
+      const map = (typeof SharedStore !== 'undefined') ? SharedStore.get(SharedStore.KEYS.ZAWIESZONE, {}) : {};
+      if (!map || typeof map !== 'object') return false;
+      const keys = [id, a3, b3].filter(Boolean).map(v => String(v).replace(/\D/g, '') || String(v));
+      return keys.some(k => k && map[k]);
+    } catch { return false; }
+  }
+
+  function normVin(v) {
+    return String(v || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+  }
+  function normPlate(v) {
+    return String(v || '').replace(/[\s\-]/g, '').toUpperCase();
+  }
+  function pickRicher(a, b) {
+    const av = String(a || '').trim();
+    const bv = String(b || '').trim();
+    if (av && bv) return av.length >= bv.length ? av : bv;
+    return av || bv;
+  }
+  function vehicleLabel(v, i) {
+    if (v.brand && v.plate) return `${v.brand} (${v.plate})`;
+    if (v.plate) return `Pojazd (${v.plate})`;
+    if (v.brand) return v.brand;
+    if (v.vin) return `VIN: ${v.vin}`;
+    return `Pojazd #${i || ''}`;
+  }
+  function sameVehicle(a, b) {
+    const va = normVin(a.vin), vb = normVin(b.vin);
+    if (va.length >= 8 && vb.length >= 8) return va === vb;
+    const pa = normPlate(a.plate), pb = normPlate(b.plate);
+    if (pa.length >= 4 && pb.length >= 4) return pa === pb;
+    return false;
+  }
+  function mergeVehicleFields(a, b) {
+    const map = new Map();
+    const add = (headers, raw) => {
+      (headers || []).forEach((h, i) => {
+        const key = String(h || '').trim();
+        const val = raw ? String(raw[i] ?? '').trim() : '';
+        if (!key && !val) return;
+        const k = (key || 'pole').toLowerCase();
+        const prev = map.get(k);
+        if (!prev) map.set(k, { h: key || 'Pole', val });
+        else if (val && prev.val && val !== prev.val && !prev.val.includes(val)) prev.val = prev.val + ' · ' + val;
+        else if (val && !prev.val) prev.val = val;
+      });
+    };
+    add(a.headers, a.raw);
+    add(b.headers, b.raw);
+    const headers = [...map.values()].map(x => x.h);
+    const raw = [...map.values()].map(x => x.val);
+    const merged = {
+      brand: pickRicher(a.brand, b.brand),
+      plate: pickRicher(a.plate, b.plate),
+      vin: pickRicher(a.vin, b.vin),
+      polisa: pickRicher(a.polisa, b.polisa),
+      year: pickRicher(a.year, b.year),
+      raw, headers
+    };
+    merged.label = vehicleLabel(merged);
+    return merged;
+  }
+  function dedupeVehicles(list) {
+    const out = [];
+    (list || []).forEach(v => {
+      const i = out.findIndex(x => sameVehicle(x, v));
+      if (i >= 0) out[i] = mergeVehicleFields(out[i], v);
+      else out.push(v);
+    });
+    return out;
+  }
+
   function getCepikInfoForId(id) {
     const db = bazaDanych || window.WroDatabase;
     if (!id || !db) return null;
@@ -616,6 +761,7 @@ const WroModule = (() => {
     const headers = rows[0] || [];
     
     const brandIdx = headers.findIndex(h => /marka|model|pojazd|opis|typ/i.test(h));
+    const yearIdx = headers.findIndex(h => /rok|rocznik|data.*rej|pierwsz.*rej|rok.*prod/i.test(h));
     const plateIdx = headers.findIndex(h => /rejestr|nr.*rej|tablica|rejestracj/i.test(h));
     const vinIdx = headers.findIndex(h => /vin/i.test(h));
     const polisaIdx = headers.findIndex(h => /polisa|ubezpiecz/i.test(h));
@@ -624,33 +770,46 @@ const WroModule = (() => {
     for (let i = 1; i < rows.length; i++) {
       const r = rows[i];
       const brand = brandIdx >= 0 ? String(r[brandIdx] || '').trim() : '';
+      const yearRaw = yearIdx >= 0 ? String(r[yearIdx] || '').trim() : '';
+      const year = (yearRaw.match(/(?:19|20)\d{2}/) || [yearRaw])[0];
       const plate = plateIdx >= 0 ? String(r[plateIdx] || '').trim() : '';
       const vin = vinIdx >= 0 ? String(r[vinIdx] || '').trim() : '';
       const polisa = polisaIdx >= 0 ? String(r[polisaIdx] || '').trim() : '';
 
-      let label = '';
-      if (brand && plate) label = `${brand} (${plate})`;
-      else if (plate) label = `Pojazd (${plate})`;
-      else if (brand) label = brand;
-      else if (vin) label = `VIN: ${vin}`;
-      else label = `Pojazd #${i}`;
+      if (!brand && !plate && !vin) continue;
 
-      vehicles.push({ label, brand, plate, vin, polisa, raw: r, headers });
+      vehicles.push({
+        label: vehicleLabel({ brand, plate, vin }, i),
+        brand, plate, vin, polisa, year, raw: r, headers
+      });
     }
+
+    const uniqueVehicles = dedupeVehicles(vehicles);
 
     const today = new Date();
     const todayShort = `${String(today.getDate()).padStart(2,'0')}.${String(today.getMonth()+1).padStart(2,'0')}`;
-    const summaryText = vehicles.map(v => v.label).join(', ');
-    const formattedNote = vehicles.length > 0 ? `[CEPIK ${todayShort}: ${summaryText}]` : `[CEPIK ${todayShort}: Brak pojazdów]`;
+    const summaryText = uniqueVehicles.map(v => v.label).join(', ');
+    const formattedNote = uniqueVehicles.length > 0 ? `[CEPIK ${todayShort}: ${summaryText}]` : `[CEPIK ${todayShort}: Brak pojazdów]`;
 
     return {
-      hasVehicles: vehicles.length > 0,
-      vehicles,
+      hasVehicles: uniqueVehicles.length > 0,
+      vehicles: uniqueVehicles,
       summaryText,
       formattedNote,
       headers,
       rawRows: rows
     };
+  }
+
+  function openInSzafka(id) {
+    const view = resolveEntityView(id);
+    const pesel = (view.person && view.person.pesel) || view.b3;
+    const nip = (view.person && view.person.nip) || view.a3;
+    if (!pesel && !nip) {
+      if (typeof showToast === 'function') showToast('Brak PESEL/NIP do otwarcia teczki', 'info', 2500);
+      return;
+    }
+    if (typeof Router !== 'undefined') Router.navigate('zobowiazani', { pesel, nip });
   }
 
   function getBazaDanych() { return bazaDanych; }
@@ -660,7 +819,7 @@ const WroModule = (() => {
     toggleStatus, toggleCart, updateCartCounter,
     renderCart, clearCart, exportProgress, exportMatrixCSV,
     expandAll, collapseAll,
-    getCepikInfoForId, getBazaDanych, importBazaDanych
+    getCepikInfoForId, getBazaDanych, importBazaDanych, openInSzafka
   };
 })();
 

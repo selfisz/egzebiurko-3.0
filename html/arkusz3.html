@@ -199,13 +199,14 @@ table.grid{border-collapse:separate;border-spacing:0;width:max-content;min-width
 .menu.open{display:block}.menu button,.menu .mi{width:100%;text-align:left;border:0;background:transparent;color:var(--text);padding:8px 10px;border-radius:8px;font:inherit;cursor:pointer;display:block}
 .menu button:hover{background:var(--panel2)}.menu .sep{height:1px;background:var(--line);margin:4px 0}
 .popup,.dlg{position:fixed;z-index:50;background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);padding:12px;min-width:260px;color:var(--text)}
-#colFilterPopup{min-width:300px;width:min(340px,92vw);max-height:min(520px,85vh);overflow:auto}
-#colFilterPopup .cf-links{display:flex;gap:10px;flex-wrap:wrap;margin:0 0 8px;font-size:.75rem}
+#colFilterPopup{min-width:300px;width:min(340px,92vw);max-height:min(70vh,520px);overflow-x:hidden;overflow-y:auto;display:flex;flex-direction:column;overscroll-behavior:contain}
+#colFilterPopup .cf-links{display:flex;gap:10px;flex-wrap:wrap;margin:0 0 8px;font-size:.75rem;flex-shrink:0}
 #colFilterPopup .cf-links a{color:var(--accent);text-decoration:none;cursor:pointer}
 #colFilterPopup .cf-links a:hover{text-decoration:underline}
-#colFilterPopup .cf-box{max-height:220px;overflow-y:auto;border:1px solid var(--line);border-radius:8px;padding:6px;background:var(--panel2);font-size:.8rem;display:flex;flex-direction:column;gap:3px}
-#colFilterPopup .cf-sep{height:1px;background:var(--line);margin:10px 0}
-#colFilterPopup .cf-sub{font-size:.72rem;color:var(--muted);margin:0 0 4px;font-weight:650}
+#colFilterPopup .cf-box{flex:0 1 auto;min-height:72px;max-height:min(220px,36vh);overflow-y:auto;border:1px solid var(--line);border-radius:8px;padding:6px;background:var(--panel2);font-size:.8rem;display:flex;flex-direction:column;gap:3px}
+#colFilterPopup .cf-sep{height:1px;background:var(--line);margin:10px 0;flex-shrink:0}
+#colFilterPopup .cf-sub{font-size:.72rem;color:var(--muted);margin:0 0 4px;font-weight:650;flex-shrink:0}
+#colFilterPopup .actions{flex-shrink:0;position:sticky;bottom:0;background:var(--panel);padding-top:8px;margin-top:4px;z-index:1}
 .dlg{left:50%;top:50%;transform:translate(-50%,-50%);width:min(440px,92vw);max-height:80vh;overflow:auto}
 .dlg h3{margin:0 0 10px;font-size:1rem}.dlg .row{display:grid;gap:6px;margin-bottom:10px}.dlg .row label{font-size:.75rem;color:var(--muted)}
 .dlg textarea{width:100%;min-height:160px;resize:vertical;border:1px solid var(--line);border-radius:8px;padding:8px;font:inherit;font-size:.82rem;font-family:var(--mono);background:var(--panel2);color:var(--text);box-sizing:border-box}
@@ -391,7 +392,7 @@ table.grid{border-collapse:separate;border-spacing:0;width:max-content;min-width
         <button type="button" data-export-scope="sheet" id="btnExportScopeSheet">Cała karta</button>
         <button type="button" data-export-scope="selected" id="btnExportScopeSel">Zaznaczone</button>
       </div>
-      <button class="btn sm primary" id="btnExportCopyPlain" type="button" title="Kopiuje czysty tekst (TSV) do wklejenia w Excelu bez tabel i obramowań" style="background:#16a34a; border-color:#15803d; color:#fff; font-weight:700;">📋 Kopiuj (Excel — bez formatowania)</button>
+      <button class="btn sm primary" id="btnExportCopyPlain" type="button" title="Kopiuje kolumny osobno (tabulatory + tabela HTML) — w Excelu wklej Ctrl+V, każda kolumna w osobnej komórce, bez ramek" style="background:#16a34a; border-color:#15803d; color:#fff; font-weight:700;">📋 Kopiuj (Excel — bez formatowania)</button>
       <button class="btn sm" id="btnExportCopy" type="button" title="Kopiuje tabelę HTML do wklejenia w Wordzie">📑 Kopiuj tabelę (Word)</button>
       <button class="btn sm" id="btnDirectXls" type="button" title="Pobierz plik Excel (.xls)">📥 Pobierz Excel</button>
       <button class="btn sm" id="btnDirectCsv" type="button" title="Pobierz plik CSV">📥 Pobierz CSV</button>
@@ -609,15 +610,18 @@ const REG_STATUS={
   partial:'Częściowo',
   overdue:'Przeterminowany',
   ok:'OK',
-  today:'Dziś'
+  today:'Dziś',
+  suspended:'Zawieszone'
 };
 const REG_STATUS_COLOR={
   'Do zrobienia':'yellow',
   'Częściowo':'orange',
   'Przeterminowany':'red',
   'OK':'green',
-  'Dziś':'blue'
+  'Dziś':'blue',
+  'Zawieszone':'brown'
 };
+const isSuspendedStan=v=>/^zawiesz/i.test(norm(v));
 const $=id=>document.getElementById(id);
 
 const uid=()=>'s'+Math.random().toString(36).slice(2,9);
@@ -933,7 +937,7 @@ function insertRowAt(ri, before){
 const App={workbook:'Skoroszyt bez nazwy', sheets:[], activeId:null, wrap:false, center:false, plain:false, theme:'navy', dark:false,
   dragCol:null, dragSheet:null, filterCol:null, activeCell:null, schemas:[], undoStack:[], activeSchema:null,
   pasteHistory:[], findCursor:{r:0,c:0}, copyMode:'copy', statuses:JSON.parse(JSON.stringify(DEFAULT_STATUSES)),
-  selRange:null, anchorCell:null, editing:null, selecting:false, virtTop:0, _virtBound:false, _skipScroll:false,
+  selRange:null, anchorCell:null, editing:null, selecting:false, selectCol:null, virtTop:0, _virtBound:false, _skipScroll:false,
   ribbonTab:'dane', exportScope:'auto', workMode:'adhoc', expandedCells:new Set()};
 
 function cellExpKey(ri,ci){return ri+':'+ci;}
@@ -1937,6 +1941,19 @@ function focusCell(ri,ci,extend){
   setActiveCell(sh,ri,ci);
   sh.last=ri;
 }
+function rowIndexFromClientY(clientY){
+  const wrap=$('gridWrap'); const sh=active();
+  if(!wrap||!sh) return -1;
+  const idxs=sorted(sh, filtered(sh));
+  if(!idxs.length) return -1;
+  const wrapping=sheetHasColWrap(sh);
+  const rowEstH=wrapping?ROW_H_WRAP:ROW_H;
+  const thead=wrap.querySelector('thead');
+  const headH=thead?thead.getBoundingClientRect().height:36;
+  const y=clientY-wrap.getBoundingClientRect().top+wrap.scrollTop-headH;
+  const vi=Math.max(0, Math.min(idxs.length-1, Math.floor(y/rowEstH)));
+  return idxs[vi];
+}
 function moveActive(dr,dc,extend){
   const sh=active(); if(!sh||!App.activeCell) return;
   const cols=visCols(sh); if(!cols.length) return;
@@ -2039,9 +2056,10 @@ function afterSystemCellEdit(sh, ri, ci){
     return sci>=0?(sh.rows[ri][sci]||''):'';
   });
   const {stan,komplet}=computePersonStatus(dates);
-  if(stanCi>=0) sh.rows[ri][stanCi]=stan;
+  if(stanCi>=0 && !isSuspendedStan(sh.rows[ri][stanCi])) sh.rows[ri][stanCi]=stan;
   if(kompCi>=0) sh.rows[ri][kompCi]=komplet;
-  const color=REG_STATUS_COLOR[stan];
+  const outStan=stanCi>=0?sh.rows[ri][stanCi]:stan;
+  const color=REG_STATUS_COLOR[outStan]||REG_STATUS_COLOR[stan];
   if(color) sh.rowColors[ri]=color; else delete sh.rowColors[ri];
 
   // Tryb Z bazą: wpis (np. nr auta w UFG) od razu do Zobowiązanych
@@ -2089,6 +2107,11 @@ function buildRowTr(sh, ri, displayIdx, cols, idxs){
   }
   const ctd=document.createElement('td'); ctd.className='corner';
   ctd.innerHTML=`<div class="th-inner" style="justify-content:center;gap:4px"><input type="checkbox" ${sh.selected.has(ri)?'checked':''}><span title="Nr w widoku (po sortowaniu)">${displayIdx+1}</span>${stBadge}</div>`; tr.append(ctd);
+  ctd.onclick=e=>{
+    if(e.target.matches('input[type=checkbox]')) return;
+    e.stopPropagation();
+    selectRow(sh,ri,e);
+  };
 
   cols.forEach(ci=>{
     const td=document.createElement('td');
@@ -2139,6 +2162,7 @@ function buildRowTr(sh, ri, displayIdx, cols, idxs){
         e.preventDefault(); e.stopPropagation();
         if(App.editing) endEdit(true);
         App.selecting=true;
+        App.selectCol=ci;
         focusCell(ri,ci, e.shiftKey);
         renderGrid();
         updateStatus(sh,idxs);
@@ -2157,7 +2181,23 @@ function buildRowTr(sh, ri, displayIdx, cols, idxs){
   });
   tr.onclick=e=>{if(e.target.closest('.cell')||e.target.closest('.cell-editor')||e.target.matches('input[type=checkbox]'))return; selectRow(sh,ri,e);};
   tr.oncontextmenu=e=>{ if(e.target.closest('input')) return; openRowContextMenu(e, ri); };
-  ctd.querySelector('input').onclick=e=>{e.stopPropagation(); if(e.target.checked) sh.selected.add(ri); else sh.selected.delete(ri); sh.last=ri; renderGrid();};
+  ctd.querySelector('input').onmousedown=e=>e.stopPropagation();
+  ctd.querySelector('input').onclick=e=>{
+    e.stopPropagation();
+    if(e.shiftKey && sh.last>=0){
+      selectRow(sh, ri, e);
+      return;
+    }
+    if(e.ctrlKey||e.metaKey){
+      if(e.target.checked) sh.selected.add(ri); else sh.selected.delete(ri);
+      sh.last=ri;
+      renderGrid();
+      return;
+    }
+    if(e.target.checked) sh.selected.add(ri); else sh.selected.delete(ri);
+    sh.last=ri;
+    renderGrid();
+  };
   ctd.oncontextmenu=e=>openRowContextMenu(e, ri);
   return tr;
 }
@@ -2464,8 +2504,36 @@ function openColFilter(ci, anchor){
 
   const r=anchor.getBoundingClientRect();
   pop.classList.remove('hidden');
-  pop.style.left=Math.min(window.innerWidth-320, Math.max(8,r.left))+'px';
-  pop.style.top=Math.min(window.innerHeight-420, r.bottom+6)+'px';
+  const pad=8;
+  const vw=window.innerWidth, vh=window.innerHeight;
+  const spaceBelow=vh-r.bottom-pad;
+  const spaceAbove=r.top-pad;
+  const preferBelow=spaceBelow>=220 || spaceBelow>=spaceAbove;
+  const maxH=Math.max(180, Math.min(520, (preferBelow?spaceBelow:spaceAbove)-4));
+  pop.style.maxHeight=maxH+'px';
+  const pw=Math.min(340, vw-pad*2);
+  let left=Math.min(vw-pw-pad, Math.max(pad, r.left));
+  pop.style.left=left+'px';
+  pop.style.width=pw+'px';
+  if(preferBelow){
+    pop.style.top=(r.bottom+6)+'px';
+    pop.style.bottom='auto';
+  }else{
+    pop.style.top='auto';
+    pop.style.bottom=(vh-r.top+6)+'px';
+  }
+  requestAnimationFrame(()=>{
+    const pr=pop.getBoundingClientRect();
+    if(pr.bottom>vh-pad){
+      pop.style.top='auto';
+      pop.style.bottom=pad+'px';
+      pop.style.maxHeight=Math.max(160, vh-pad*2)+'px';
+    }
+    if(pr.top<pad){
+      pop.style.bottom='auto';
+      pop.style.top=pad+'px';
+    }
+  });
   setTimeout(()=>pop.querySelector('#cfSearchList').focus(), 40);
 }
 
@@ -2551,7 +2619,7 @@ function renderGrid(){
     c.dataset.ci=ci; cg.append(c);
   });
   head.innerHTML=''; const hr=document.createElement('tr');
-  const corner=document.createElement('th'); corner.className='corner'; corner.innerHTML='<div class="th-inner" style="justify-content:center"><input type="checkbox" id="selectAllCb"></div>'; hr.append(corner);
+  const corner=document.createElement('th'); corner.className='corner'; corner.innerHTML='<div class="th-inner" style="justify-content:center"><input type="checkbox" id="selectAllCb" title="Zaznacz wszystkie widoczne wiersze. Shift+klik = zakres, Ctrl+klik = dopisz."></div>'; hr.append(corner);
   cols.forEach(ci=>{
     const th=document.createElement('th');
     if(isColWrap(sh,ci)) th.classList.add('col-wrap');
@@ -2688,7 +2756,25 @@ function renderGrid(){
       foot.append(tr);
     }
   }
-  const sa=$('selectAllCb'); if(sa){const all=idxs.length>0&&idxs.every(i=>sh.selected.has(i)); sa.checked=all; sa.indeterminate=!all&&idxs.some(i=>sh.selected.has(i)); sa.onchange=()=>{if(sa.checked) idxs.forEach(i=>sh.selected.add(i)); else idxs.forEach(i=>sh.selected.delete(i)); renderGrid();};}
+  const sa=$('selectAllCb');
+  if(sa){
+    const all=idxs.length>0&&idxs.every(i=>sh.selected.has(i));
+    sa.checked=all;
+    sa.indeterminate=!all&&idxs.some(i=>sh.selected.has(i));
+    sa.onclick=e=>{
+      e.stopPropagation();
+      const want=!!sa.checked;
+      if(want) idxs.forEach(i=>sh.selected.add(i));
+      else idxs.forEach(i=>sh.selected.delete(i));
+      const vcols=visCols(sh);
+      if(want && idxs.length && vcols.length){
+        setSelRange(idxs[0], vcols[0], idxs[idxs.length-1], vcols[vcols.length-1]);
+      }else{
+        clearSelRange();
+      }
+      renderGrid();
+    };
+  }
   updateStatus(sh,idxs); renderChips();
 }
 
@@ -3533,12 +3619,16 @@ function refreshRegistryDerived(reg){
   if(stanCi<0 && inactCi<0) return;
   reg.rows.forEach((row,ri)=>{
     if(stanCi>=0){
-      const dates=sysIdx.map(ci=>row[ci]||'');
-      const {stan,komplet}=computePersonStatus(dates);
-      row[stanCi]=stan;
-      if(kompCi>=0) row[kompCi]=komplet;
-      const color=REG_STATUS_COLOR[stan];
-      if(color) reg.rowColors[ri]=color; else delete reg.rowColors[ri];
+      if(isSuspendedStan(row[stanCi])){
+        reg.rowColors[ri]='brown';
+      }else{
+        const dates=sysIdx.map(ci=>row[ci]||'');
+        const {stan,komplet}=computePersonStatus(dates);
+        row[stanCi]=stan;
+        if(kompCi>=0) row[kompCi]=komplet;
+        const color=REG_STATUS_COLOR[stan];
+        if(color) reg.rowColors[ri]=color; else delete reg.rowColors[ri];
+      }
     }
     if(inactCi>=0){
       let out='';
@@ -3843,11 +3933,14 @@ function enrichActiveFromRegistry(){
     }
     const dates=REG_SYSTEMS.map(n=>{ const ci=rmap[n]; return ci!=null?(reg.rows[dest][ci]||''):''; });
     const {stan,komplet}=computePersonStatus(dates);
-    row[stanCi]=stan;
+    const regStan=rmap.Stan!=null?norm(reg.rows[dest][rmap.Stan]):'';
+    const outStan=isSuspendedStan(regStan)?regStan:stan;
+    row[stanCi]=outStan;
     if(kompCi>=0) row[kompCi]=komplet;
-    const color=REG_STATUS_COLOR[stan];
+    const color=REG_STATUS_COLOR[outStan];
     if(color) sh.rowColors[ri]=color; else delete sh.rowColors[ri];
-    if(stan===REG_STATUS.todo) counts.todo++;
+    if(isSuspendedStan(outStan)) { /* osobny status, nie licz w todo */ }
+    else if(stan===REG_STATUS.todo) counts.todo++;
     else if(stan===REG_STATUS.partial) counts.partial++;
     else if(stan===REG_STATUS.overdue) counts.overdue++;
     else if(stan===REG_STATUS.today) counts.today++;
@@ -4261,9 +4354,11 @@ function syncListToRegistry(){
       return rci!=null?(reg.rows[dest][rci]||''):'';
     });
     const {stan,komplet}=computePersonStatus(dates);
-    if(stanOut>=0) sh.rows[ri][stanOut]=stan;
+    const regStanCi=findSystemCol(reg,'Stan');
+    const regStan=regStanCi>=0?norm(reg.rows[dest][regStanCi]):'';
+    if(stanOut>=0) sh.rows[ri][stanOut]=isSuspendedStan(regStan)?regStan:stan;
     if(kompOut>=0) sh.rows[ri][kompOut]=komplet;
-    const color=REG_STATUS_COLOR[stan];
+    const color=REG_STATUS_COLOR[isSuspendedStan(regStan)?regStan:stan];
     if(color) sh.rowColors[ri]=color;
   });
 
@@ -4315,7 +4410,7 @@ function addMissingToRegistry(){
   const nameCiReg=reg.columns.findIndex(c=>/nazwisk|imi[eę]|osoba|nazwa/i.test(String(c||'')));
   const listPeselCi=findSystemCol(sh,'PESEL');
   const listNipCi=findSystemCol(sh,'NIP');
-  const idxs=sh.selected.size?[...sh.selected].sort((a,b)=>a-b):sh.rows.map((_,i)=>i);
+  const idxs=sh.rows.map((_,i)=>i);
 
   const listPeople=[];
   const listKeys=new Set();
@@ -4472,19 +4567,28 @@ function applyExcelRefresh({added, archive}){
   REG_SYSTEMS.forEach(n=>ensureCol(reg,n,100));
   REG_META.forEach(n=>ensureCol(reg,n, isMetaTextCol(n)?META_TEXT_COL_W:110));
 
+  const src=active();
   let addN=0;
   (added||[]).forEach(p=>{
     const key=cleanId(p.key);
     if(!key) return;
     if(findRegistryRowByKey(reg, key)!=null) return;
     const dest=ensureRegistryPerson(reg, key);
-    if(dest>=0 && p.name){
+    if(dest<0) return;
+    padSheetRow(reg, dest);
+    if(p.name){
       let nci=reg.columns.findIndex(c=>/nazwisk|imi[eę]|osoba|nazwa/i.test(String(c||'')));
       if(nci<0) nci=ensureCol(reg,'Nazwisko',160);
-      if(nci>=0){
-        padSheetRow(reg, dest);
-        if(!norm(reg.rows[dest][nci])) reg.rows[dest][nci]=p.name;
-      }
+      if(nci>=0 && !norm(reg.rows[dest][nci])) reg.rows[dest][nci]=p.name;
+    }
+    if(src && p.rowIndex!=null && src.rows[p.rowIndex]){
+      const srcRow=src.rows[p.rowIndex];
+      src.columns.forEach((col,ci)=>{
+        const val=norm(srcRow[ci]);
+        if(!val) return;
+        const destCi=reg.columns.findIndex(c=>norm(c).toLowerCase()===norm(col).toLowerCase());
+        if(destCi>=0 && !norm(reg.rows[dest][destCi])) reg.rows[dest][destCi]=val;
+      });
     }
     addN++;
   });
@@ -4499,12 +4603,18 @@ function applyExcelRefresh({added, archive}){
       map[key]={ at, name:p.name||'', reason:'Dodaj do bazy' };
     });
     writeSzafkaArchiveMap(map);
+    try{
+      if(window.parent && window.parent!==window && window.parent.ZobowiazaniModule && typeof window.parent.ZobowiazaniModule.applyArchiveIds==='function'){
+        window.parent.ZobowiazaniModule.applyArchiveIds(archList.map(p=>p.key), { at, reason:'Dodaj do bazy' });
+      }
+    }catch(_){}
   }
 
   refreshRegistryDerived(reg);
   render();
   scheduleAutosave();
-  toast('Dodaj do bazy: +'+addN+' nowych'+(archList.length?(', '+archList.length+' → Archiwum Szafki'):''));
+  const msg='Dodano '+addN+' do ★ Zobowiązani'+(archList.length?(' · '+archList.length+' → Archiwum Szafki (znikną z listy aktywnych)'):'')+'. Otwórz kartę Zobowiązani / Szafkę, żeby zobaczyć.';
+  toast(msg);
 }
 
 function fillRegSysMenu(){ /* legacy no-op */ }
@@ -5109,9 +5219,21 @@ function exportWord(sel, plain){
 async function copyPlainForExcel(sel){
   const {headers,rows}=exportCols(active(), !!sel);
   if(!headers.length){ toast('Brak danych do skopiowania'); return; }
-  const plainText=[headers,...rows].map(r=>r.map(c=>String(c??'')).join('\t')).join('\r\n');
+  const tsvRow=arr=>arr.map(c=>{
+    const s=String(c??'').replace(/\r\n/g,'\n').replace(/\r/g,'\n');
+    if(/[\t\n"]/.test(s)) return '"'+s.replace(/"/g,'""')+'"';
+    return s;
+  }).join('\t');
+  const plainText=[headers,...rows].map(tsvRow).join('\r\n');
+  const esc=s=>String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const html='<table>'+[headers,...rows].map(r=>'<tr>'+r.map(c=>'<td>'+esc(c)+'</td>').join('')+'</tr>').join('')+'</table>';
   try{
-    if(navigator.clipboard && navigator.clipboard.writeText){
+    if(navigator.clipboard && window.ClipboardItem){
+      await navigator.clipboard.write([new ClipboardItem({
+        'text/plain': new Blob([plainText],{type:'text/plain'}),
+        'text/html': new Blob([html],{type:'text/html'})
+      })]);
+    }else if(navigator.clipboard && navigator.clipboard.writeText){
       await navigator.clipboard.writeText(plainText);
     }else{
       const ta=document.createElement('textarea');
@@ -5121,7 +5243,7 @@ async function copyPlainForExcel(sel){
       document.execCommand('copy');
       ta.remove();
     }
-    toast('📋 Skopiowano czysty tekst (wklej w Excelu Ctrl+V)');
+    toast('📋 Skopiowano kolumny osobno (wklej w Excelu Ctrl+V — bez ramek)');
   }catch(_){
     const ta=document.createElement('textarea');
     ta.value=plainText;
@@ -5701,7 +5823,19 @@ document.onclick=e=>{
   if(!e.target.closest('#ctxMenu')) hideCtx();
   if(e.target.id==='backdrop'){['rulesDlg','dedupDlg','groupDlg','compareDlg','schemaDlg','pastePdfDlg','findDlg','statusDlg','dossierDlg','excelRefreshDlg'].forEach(id=>{const el=$(id); if(el) el.classList.add('hidden');}); $('backdrop').classList.add('hidden');}
 };
-document.addEventListener('mouseup', ()=>{ App.selecting=false; });
+document.addEventListener('mousemove', (e)=>{
+  if(!App.selecting || !App.anchorCell) return;
+  const sh=active(); if(!sh) return;
+  const ri=rowIndexFromClientY(e.clientY);
+  if(ri<0) return;
+  const ci=App.selectCol!=null?App.selectCol:App.anchorCell.c;
+  setSelRange(App.anchorCell.r, App.anchorCell.c, ri, ci);
+  setActiveCell(sh,ri,ci);
+  sh.last=ri;
+  if(App._selMoveT) return;
+  App._selMoveT=setTimeout(()=>{ App._selMoveT=null; renderGrid(); }, 30);
+});
+document.addEventListener('mouseup', ()=>{ App.selecting=false; App.selectCol=null; });
 document.addEventListener('contextmenu', e=>{ if(e.target.closest('#dataGrid')) {/* handled per-row */} });
 document.addEventListener('keydown', e=>{ if(e.key==='Escape') hideCtx(); });
 document.addEventListener('paste', e=>{ if(isPanicOn()){ e.preventDefault(); return; } pasteEvent(e); });

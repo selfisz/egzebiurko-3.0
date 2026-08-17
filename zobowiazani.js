@@ -25,7 +25,7 @@ const ZobowiazaniModule = (() => {
   // Stan filtrów i widoku
   let filterText = '';
   let activeFilter = 'all'; // 'all', 'todo', 'progress', 'complete', 'deferred', 'due', 'has_cepik', 'no_*'
-  let sectionFilter = 'active'; // 'active' | 'desk' | 'archive'
+  let sectionFilter = 'active'; // 'active' | 'desk' | 'archive' | 'suspended'
   let sortCol = 'idx';
   let sortDir = 1;
   let selectedRowIndex = 0;
@@ -103,6 +103,34 @@ const ZobowiazaniModule = (() => {
 
   function isArchived(key) {
     return !!(archiveMap && archiveMap[key]);
+  }
+
+  function rowStan(row) {
+    if (!dbSheet || !row) return '';
+    const ci = dbSheet.columns.indexOf('Stan');
+    return ci >= 0 ? String(row[ci] || '').trim() : '';
+  }
+
+  function isSuspendedRow(row) {
+    return /^zawiesz/i.test(rowStan(row));
+  }
+
+  function persistZawieszoneStore() {
+    if (typeof SharedStore === 'undefined' || !dbSheet) return;
+    const map = {};
+    const at = new Date().toISOString();
+    dbSheet.rows.forEach(r => {
+      if (!isSuspendedRow(r)) return;
+      const info = extractPersonInfo(r);
+      const rec = { at, name: info.name || '' };
+      const keys = [
+        personKeyFromInfo(info),
+        String(info.pesel || '').replace(/\D/g, ''),
+        String(info.nip || '').replace(/\D/g, ''),
+      ].filter(Boolean);
+      keys.forEach(k => { map[k] = rec; });
+    });
+    SharedStore.set(SharedStore.KEYS.ZAWIESZONE, map);
   }
 
   function getLastActivity(row) {
@@ -634,6 +662,7 @@ const ZobowiazaniModule = (() => {
       _lastSyncedAt = dbData.savedAt;
       // Blokuj echo sync na czas zapisu (wcześniej: SET_DB → reload → pusta baza / miganie)
       _suppressSyncUntil = Date.now() + 2500;
+      persistZawieszoneStore();
       persistLocal();
       const frame = document.getElementById('arkusz-frame');
       if (frame && frame.contentWindow) {
@@ -673,7 +702,7 @@ const ZobowiazaniModule = (() => {
       row[ciKomplet] = isComplete ? getTodayStr() : '';
     }
 
-    if (ciStan >= 0) {
+    if (ciStan >= 0 && !/^zawiesz/i.test(String(row[ciStan] || ''))) {
       if (isComplete) row[ciStan] = 'Komplet';
       else if (count > 0) row[ciStan] = 'Częściowo';
       else row[ciStan] = 'Puste';
@@ -897,6 +926,37 @@ const ZobowiazaniModule = (() => {
     return (cepik && cepik.hasVehicles) ? cepik : null;
   }
 
+  function stampUfgIfCar(rowIndex, silent, skipSave) {
+    if (!dbSheet || !dbSheet.rows[rowIndex]) return false;
+    const r = dbSheet.rows[rowIndex];
+    const info = extractPersonInfo(r);
+    const cepik = getCepikForPerson(info);
+    if (!cepik || !cepik.hasVehicles) return false;
+    ensureSystemColumns(dbSheet);
+    const ufgIdx = dbSheet.columns.indexOf('UFG');
+    if (ufgIdx < 0) return false;
+    while (r.length < dbSheet.columns.length) r.push('');
+    const cur = String(r[ufgIdx] || '').trim();
+    if (cur) return false;
+    r[ufgIdx] = getTodayStr();
+    recalcRowStatus(rowIndex);
+    if (!skipSave) saveData();
+    if (!silent && typeof showToast === 'function') {
+      showToast('UFG: wpisano datę (znaleziono pojazd w CEPIK)', 'success', 2200);
+    }
+    return true;
+  }
+
+  function stampAllUfgFromCepik() {
+    if (!dbSheet || !dbSheet.rows) return 0;
+    let n = 0;
+    dbSheet.rows.forEach((_, i) => {
+      if (stampUfgIfCar(i, true, true)) n++;
+    });
+    if (n) saveData();
+    return n;
+  }
+
   function syncCepikForPerson(rowIndex, silent = false) {
     if (!dbSheet || !dbSheet.rows) return { synced: false };
     const r = dbSheet.rows[rowIndex];
@@ -1001,9 +1061,11 @@ const ZobowiazaniModule = (() => {
     rowsWithIndex = rowsWithIndex.filter(item => {
       const key = personKeyFromRow(item.row);
       const archived = isArchived(key);
+      const suspended = isSuspendedRow(item.row);
       if (sectionFilter === 'archive') return archived;
-      if (sectionFilter === 'desk') return isPinned(key) && !archived;
-      return !archived; // active
+      if (sectionFilter === 'desk') return isPinned(key) && !archived && !suspended;
+      if (sectionFilter === 'suspended') return suspended && !archived;
+      return !archived && !suspended;
     });
 
     if (filterText) {
@@ -1075,6 +1137,20 @@ const ZobowiazaniModule = (() => {
         const dB = parseDatePl(getLastActivity(b.row)) || new Date(0);
         return (dA - dB) * sortDir;
       });
+    } else if (sortCol === 'wroc') {
+      rowsWithIndex.sort((a, b) => {
+        const dA = getDeferInfo(a.row);
+        const dB = getDeferInfo(b.row);
+        const tA = dA && dA.date ? dA.date.getTime() : 0;
+        const tB = dB && dB.date ? dB.date.getTime() : 0;
+        return (tA - tB) * sortDir;
+      });
+    } else if (sortCol === 'cepik') {
+      rowsWithIndex.sort((a, b) => {
+        const cA = getCepikForPerson(extractPersonInfo(a.row)) ? 1 : 0;
+        const cB = getCepikForPerson(extractPersonInfo(b.row)) ? 1 : 0;
+        return (cA - cB) * sortDir;
+      });
     } else if (typeof sortCol === 'number' && sortCol >= 0) {
       rowsWithIndex.sort((a, b) => {
         const valA = String(a.row[sortCol] || '').toLowerCase();
@@ -1085,7 +1161,6 @@ const ZobowiazaniModule = (() => {
         return valA.localeCompare(valB, 'pl') * sortDir;
       });
     } else {
-      // domyślnie: kolejność jak w Arkuszu (idx)
       rowsWithIndex.sort((a, b) => (a.idx - b.idx) * (sortDir || 1));
     }
 
@@ -1093,17 +1168,18 @@ const ZobowiazaniModule = (() => {
   }
 
   function computeSectionCounts() {
-    if (!dbSheet || !dbSheet.rows) return { active: 0, desk: 0, archive: 0 };
-    let active = 0, desk = 0, archive = 0;
+    if (!dbSheet || !dbSheet.rows) return { active: 0, desk: 0, archive: 0, suspended: 0 };
+    let active = 0, desk = 0, archive = 0, suspended = 0;
     dbSheet.rows.forEach(r => {
       const key = personKeyFromRow(r);
       if (isArchived(key)) archive++;
+      else if (isSuspendedRow(r)) suspended++;
       else {
         active++;
         if (isPinned(key)) desk++;
       }
     });
-    return { active, desk, archive };
+    return { active, desk, archive, suspended };
   }
 
   function computeFilterCounts() {
@@ -1115,7 +1191,8 @@ const ZobowiazaniModule = (() => {
       const archived = isArchived(key);
       if (sectionFilter === 'archive' && !archived) return;
       if (sectionFilter === 'desk' && (!(isPinned(key) && !archived))) return;
-      if (sectionFilter === 'active' && archived) return;
+      if (sectionFilter === 'suspended' && !(isSuspendedRow(r) && !archived)) return;
+      if (sectionFilter === 'active' && (archived || isSuspendedRow(r))) return;
       scoped++;
 
       const c = getPersonSysCount(r);
@@ -1199,6 +1276,9 @@ const ZobowiazaniModule = (() => {
               <button type="button" class="zob-section-btn ${sectionFilter === 'active' ? 'active' : ''}" onclick="ZobowiazaniModule.setSection('active')">
                 Aktywne <span class="zob-section-count">${sec.active}</span>
               </button>
+              <button type="button" class="zob-section-btn ${sectionFilter === 'suspended' ? 'active' : ''}" onclick="ZobowiazaniModule.setSection('suspended')">
+                Zawieszone <span class="zob-section-count">${sec.suspended}</span>
+              </button>
               <button type="button" class="zob-section-btn ${sectionFilter === 'archive' ? 'active' : ''}" onclick="ZobowiazaniModule.setSection('archive')">
                 Archiwum <span class="zob-section-count">${sec.archive}</span>
               </button>
@@ -1250,7 +1330,7 @@ const ZobowiazaniModule = (() => {
           <div class="zob-split-container mode-${viewMode}" id="zob-split">
             <aside class="zob-drawer" id="zob-drawer">
               <div class="zob-drawer-head">
-                <span class="zob-drawer-head-title">${sectionFilter === 'desk' ? 'Biurko' : sectionFilter === 'archive' ? 'Archiwum' : 'Lista zobowiązanych'}</span>
+                <span class="zob-drawer-head-title">${sectionFilter === 'desk' ? 'Biurko' : sectionFilter === 'archive' ? 'Archiwum' : sectionFilter === 'suspended' ? 'Zawieszone' : 'Lista zobowiązanych'}</span>
                 <span class="zob-drawer-count" id="zob-drawer-count">0</span>
               </div>
               <div class="zob-folder-scroll" id="zob-folder-list"></div>
@@ -1394,7 +1474,8 @@ const ZobowiazaniModule = (() => {
     });
   }
 
-  function statusMeta(sysCount) {
+  function statusMeta(sysCount, row) {
+    if (row && isSuspendedRow(row)) return { cls: 'suspended', label: 'Zawieszone' };
     if (sysCount === REG_SYSTEMS.length) return { cls: 'complete', label: 'Komplet' };
     if (sysCount > 0) return { cls: 'progress', label: 'W toku' };
     return { cls: 'todo', label: 'Braki' };
@@ -1428,7 +1509,7 @@ const ZobowiazaniModule = (() => {
         const key = personKeyFromInfo(info);
         const isSelected = ri === selectedRowIndex && activeTabKey === key;
         const sysCount = getPersonSysCount(r);
-        const st = statusMeta(sysCount);
+        const st = statusMeta(sysCount, r);
         let dots = '';
         REG_SYSTEMS.forEach(sys => {
           const sysIdx = dbSheet.columns.indexOf(sys);
@@ -1437,12 +1518,13 @@ const ZobowiazaniModule = (() => {
           const isSkip = sysVal.toLowerCase() === 'pomiń';
           dots += `<span class="zob-dot ${isDone ? 'on' : ''}${isSkip ? ' skip' : ''}" title="${sys}"></span>`;
         });
+        const hasCar = !!getCepikForPerson(info);
         cards += `
-          <button type="button" class="zob-person-row ${isSelected ? 'is-selected' : ''}" data-ri="${ri}"
+          <button type="button" class="zob-person-row ${isSelected ? 'is-selected' : ''}${hasCar ? ' has-car' : ''}" data-ri="${ri}"
             onclick="ZobowiazaniModule.select(${ri})"
             oncontextmenu="ZobowiazaniModule.openRowMenu(event, ${ri})">
             <div class="zob-person-main">
-              <div class="zob-reg-name" title="${escapeHtml(info.name)}">${escapeHtml(info.name)}</div>
+              <div class="zob-reg-name" title="${escapeHtml(info.name)}">${hasCar ? '<span class="zob-car-mark" title="Pojazd w CEPIK">🚗</span>' : ''}${escapeHtml(info.name)}</div>
               <div class="zob-systems-dots">${dots}<span class="zob-systems-count">${sysCount}/5</span></div>
             </div>
             <span class="zob-status-chip ${st.cls}">${st.label}</span>
@@ -1452,6 +1534,7 @@ const ZobowiazaniModule = (() => {
       list.innerHTML = `
         <div class="zob-person-list-head">
           <button type="button" class="zob-person-sort ${sortCol === 'name' ? 'is-sorted' : ''}" onclick="ZobowiazaniModule.sortBy('name')">Nazwisko${sortMark('name')}</button>
+          <button type="button" class="zob-person-sort ${sortCol === 'cepik' ? 'is-sorted' : ''}" onclick="ZobowiazaniModule.sortBy('cepik')">🚗${sortMark('cepik')}</button>
           <button type="button" class="zob-person-sort ${sortCol === 'stan' ? 'is-sorted' : ''}" onclick="ZobowiazaniModule.sortBy('stan')">Status${sortMark('stan')}</button>
         </div>
         <div class="zob-person-list">${cards}</div>
@@ -1469,7 +1552,7 @@ const ZobowiazaniModule = (() => {
       const key = personKeyFromInfo(info);
       const isSelected = false;
       const sysCount = getPersonSysCount(r);
-      const st = statusMeta(sysCount);
+      const st = statusMeta(sysCount, r);
       const defer = getDeferInfo(r);
       const pinned = isPinned(key);
       const lastAct = getLastActivity(r);
@@ -1491,13 +1574,14 @@ const ZobowiazaniModule = (() => {
         ? `<span class="zob-defer-chip ${defer.due ? 'due' : 'wait'}" title="Odłożone — wróć ${escapeHtml(defer.raw)}">${defer.due ? 'Do powrotu' : 'Na później'} ${escapeHtml(defer.raw)}</span>`
         : '';
 
+      const hasCar = !!getCepikForPerson(info);
       body += `
-        <tr class="${isSelected ? 'is-selected' : ''}${pinned ? ' is-pinned' : ''}" data-ri="${ri}"
+        <tr class="${isSelected ? 'is-selected' : ''}${pinned ? ' is-pinned' : ''}${hasCar ? ' has-car' : ''}" data-ri="${ri}"
           onclick="ZobowiazaniModule.select(${ri})"
           oncontextmenu="ZobowiazaniModule.openRowMenu(event, ${ri})">
           <td style="width:36px;color:var(--zob-ink-soft);font-size:.72rem">${displayIdx + 1}</td>
           <td>
-            <div class="zob-reg-name" title="${escapeHtml(info.name)}">${escapeHtml(info.name)}</div>
+            <div class="zob-reg-name" title="${escapeHtml(info.name)}">${hasCar ? '<span class="zob-car-mark" title="Pojazd w CEPIK">🚗</span>' : ''}${escapeHtml(info.name)}</div>
           </td>
           <td class="zob-reg-ids">${escapeHtml(idLine || '—')}</td>
           <td title="${escapeHtml(info.adresStr || '')}"><span class="zob-reg-addr">${escapeHtml(adresShort)}</span></td>
@@ -1506,6 +1590,7 @@ const ZobowiazaniModule = (() => {
           </td>
           <td style="text-align:center"><span class="zob-status-chip ${st.cls}">${st.label}</span></td>
           <td>${deferChip || '<span class="zob-muted">—</span>'}</td>
+          <td style="text-align:center">${hasCar ? '<span class="zob-car-mark" title="Pojazd w CEPIK">🚗</span>' : '<span class="zob-muted">—</span>'}</td>
           <td class="zob-reg-ids">${escapeHtml(lastAct || '—')}</td>
           <td style="text-align:center" onclick="event.stopPropagation()">
             <button type="button" class="zob-pin-btn ${pinned ? 'on' : ''}" title="${pinned ? 'Zdejmij z Biurka' : 'Przypnij do Biurka'}"
@@ -1525,7 +1610,8 @@ const ZobowiazaniModule = (() => {
             <th onclick="ZobowiazaniModule.sortBy('adres')" class="${sortCol === 'adres' ? 'is-sorted' : ''}">Adres${sortMark('adres')}</th>
             <th onclick="ZobowiazaniModule.sortBy('stan')" class="${sortCol === 'stan' ? 'is-sorted' : ''}" style="width:120px">Systemy${sortMark('stan')}</th>
             <th onclick="ZobowiazaniModule.sortBy('stan')" class="${sortCol === 'stan' ? 'is-sorted' : ''}" style="width:100px;text-align:center">Status${sortMark('stan')}</th>
-            <th>Wróć</th>
+            <th onclick="ZobowiazaniModule.sortBy('wroc')" class="${sortCol === 'wroc' ? 'is-sorted' : ''}">Wróć${sortMark('wroc')}</th>
+            <th onclick="ZobowiazaniModule.sortBy('cepik')" class="${sortCol === 'cepik' ? 'is-sorted' : ''}" style="width:52px;text-align:center" title="Pojazd CEPIK">🚗${sortMark('cepik')}</th>
             <th onclick="ZobowiazaniModule.sortBy('aktywnosc')" class="${sortCol === 'aktywnosc' ? 'is-sorted' : ''}">Ostatnia czynność${sortMark('aktywnosc')}</th>
             <th style="width:44px;text-align:center" title="Biurko">📌</th>
           </tr>
@@ -1575,7 +1661,7 @@ const ZobowiazaniModule = (() => {
     const visibleRows = getFilteredRows();
     const curVisIdx = visibleRows.findIndex(item => item.idx === selectedRowIndex);
     const cepik = getCepikForPerson(info);
-    const st = statusMeta(sysCount);
+    const st = statusMeta(sysCount, r);
     const defer = getDeferInfo(r);
     const animKey = ++folderAnimToken;
 
@@ -1672,15 +1758,24 @@ const ZobowiazaniModule = (() => {
               <button class="zob-btn-komplet" onclick="ZobowiazaniModule.syncCepik(${selectedRowIndex})">Synchronizuj</button>
             </div>
             <div style="display:flex;flex-direction:column;gap:8px">
-              ${cepik.vehicles.map(v => `
-                <div class="zob-vehicle">
-                  <div>
-                    <div class="zob-vehicle-brand">${escapeHtml(v.brand || 'Pojazd')}</div>
-                    <div class="zob-vehicle-meta">${v.vin ? `VIN: ${escapeHtml(v.vin)}` : ''} ${v.polisa ? `· Polisa: ${escapeHtml(v.polisa)}` : ''}</div>
+              ${cepik.vehicles.map((v) => {
+                const year = String(v.year || '').match(/(?:19|20)\d{2}/)?.[0] || String(v.year || '').trim();
+                const fields = (v.headers || []).map((h, c) => {
+                  const val = v.raw ? String(v.raw[c] ?? '').trim() : '';
+                  if (!h && !val) return '';
+                  return `<div class="wro-card-row"><div class="wro-label">${escapeHtml(String(h || 'Pole'))}</div><div class="wro-value">${escapeHtml(val || '—')}</div></div>`;
+                }).join('');
+                return `<div class="zob-vehicle" onclick="this.classList.toggle('open')" title="Kliknij, aby rozwinąć pełne dane">
+                  <div class="zob-vehicle-sum">
+                    <div>
+                      <div class="zob-vehicle-brand">${escapeHtml(v.brand || v.label || 'Pojazd')}</div>
+                      <div class="zob-vehicle-meta">${[year ? `Rok rej.: ${escapeHtml(year)}` : '', v.vin ? `VIN: ${escapeHtml(v.vin)}` : ''].filter(Boolean).join(' · ') || 'Kliknij, aby rozwinąć'}</div>
+                    </div>
+                    <span class="zob-badge-mono">${escapeHtml(v.plate || 'Brak tablicy')}</span>
                   </div>
-                  <span class="zob-badge-mono">${escapeHtml(v.plate || 'Brak tablicy')}</span>
-                </div>
-              `).join('')}
+                  <div class="zob-vehicle-full"><div class="wro-card">${fields || '<div class="wro-card-row"><div class="wro-value">Brak szczegółów</div></div>'}</div></div>
+                </div>`;
+              }).join('')}
             </div>
           </div>
         `;
@@ -1711,10 +1806,11 @@ const ZobowiazaniModule = (() => {
             ${info.nip ? `<button type="button" class="zob-id-chip" title="Kopiuj NIP" onclick="ZobowiazaniModule.copy('${info.nip}', this)"><span class="lbl">NIP</span>${info.nip}</button>` : ''}
             ${info.adresStr ? `<button type="button" class="zob-open-addr" title="Kopiuj adres" onclick="ZobowiazaniModule.copy(decodeURIComponent('${encodeURIComponent(info.adresStr)}'), this)">${escapeHtml(info.adresStr)}</button>` : ''}
           </div>` : ''}
-          <div class="zob-open-sub"><span class="zob-status-chip ${st.cls}">${st.label}</span> · ${sysCount}/5 systemów · #${selectedRowIndex + 1}${defer ? ` · <span class="zob-defer-chip ${defer.due ? 'due' : 'wait'}">${defer.due ? 'Do powrotu' : 'Na później'} ${escapeHtml(defer.raw)}</span>` : ''}</div>
+          <div class="zob-open-sub"><span class="zob-status-chip ${st.cls}">${st.label}</span> · ${sysCount}/5 systemów · #${selectedRowIndex + 1}${cepik ? ' · 🚗 CEPIK' : ''}${defer ? ` · <span class="zob-defer-chip ${defer.due ? 'due' : 'wait'}">${defer.due ? 'Do powrotu' : 'Na później'} ${escapeHtml(defer.raw)}</span>` : ''}</div>
         </div>
         <div class="zob-open-header-actions">
           <button type="button" class="zob-pin-btn ${isPinned(pkey) ? 'on' : ''}" onclick="ZobowiazaniModule.togglePin(decodeURIComponent('${encodeURIComponent(pkey)}'))" title="Biurko">${isPinned(pkey) ? '📌 Biurko' : '📍 Biurko'}</button>
+          <button type="button" class="zob-action-btn ${isSuspendedRow(r) ? 'is-on' : ''}" onclick="ZobowiazaniModule.toggleSuspend(${selectedRowIndex})" title="Zawieś sprawę">${isSuspendedRow(r) ? '▶ Wznów' : '⏸ Zawieś'}</button>
           <button type="button" class="zob-action-btn" onclick="ZobowiazaniModule.openDeferMenu(${selectedRowIndex}, event)" title="Odłóż / przypomnienie">Odłóż</button>
           <button class="zob-btn-komplet" onclick="ZobowiazaniModule.setAll(${selectedRowIndex})" title="Oznacz komplet">Komplet</button>
           <div class="zob-win-controls">
@@ -1779,6 +1875,7 @@ const ZobowiazaniModule = (() => {
   }
 
   function selectRow(ri) {
+    stampUfgIfCar(ri, true);
     openOrActivateTab(ri);
     renderViews();
   }
@@ -1788,6 +1885,7 @@ const ZobowiazaniModule = (() => {
     if (!t) return;
     activeTabKey = key;
     selectedRowIndex = t.rowIndex;
+    stampUfgIfCar(t.rowIndex, true);
     if (viewMode === 'list') viewMode = 'split';
     persistOpenTabs();
     renderViews();
@@ -1902,6 +2000,7 @@ const ZobowiazaniModule = (() => {
       'sep',
       { label: pinned ? 'Zdejmij z Biurka' : 'Przypnij do Biurka', action: () => togglePin(key) },
       { label: 'Odłóż / przypomnienie…', action: () => openDeferMenu(ri, e) },
+      { label: isSuspendedRow(dbSheet.rows[ri]) ? '▶ Wznów sprawę' : '⏸ Zawieś sprawę', action: () => toggleSuspend(ri) },
       { label: archived ? 'Przywróć z Archiwum' : 'Archiwizuj', action: () => archivePerson(ri), danger: !archived },
       'sep',
     ];
@@ -1948,6 +2047,7 @@ const ZobowiazaniModule = (() => {
       const pkey = personKeyFromInfo(info);
       items.push('sep');
       items.push({ label: isPinned(pkey) ? 'Zdejmij z Biurka' : 'Przypnij do Biurka', action: () => togglePin(pkey) });
+      items.push({ label: isSuspendedRow(dbSheet.rows[t.rowIndex]) ? '▶ Wznów sprawę' : '⏸ Zawieś sprawę', action: () => toggleSuspend(t.rowIndex) });
       items.push({ label: isArchived(pkey) ? 'Przywróć z Archiwum' : 'Archiwizuj', action: () => archivePerson(t.rowIndex), danger: !isArchived(pkey) });
     }
     buildCtxItems(menu, t.name || 'Karta', items);
@@ -1962,7 +2062,26 @@ const ZobowiazaniModule = (() => {
   }
 
   function setSection(sec) {
-    sectionFilter = sec === 'desk' || sec === 'archive' ? sec : 'active';
+    sectionFilter = (sec === 'desk' || sec === 'archive' || sec === 'suspended') ? sec : 'active';
+    renderViews();
+  }
+
+  function toggleSuspend(ri) {
+    if (!dbSheet || !dbSheet.rows[ri]) return;
+    ensureSystemColumns(dbSheet);
+    const ci = dbSheet.columns.indexOf('Stan');
+    if (ci < 0) return;
+    const r = dbSheet.rows[ri];
+    while (r.length < dbSheet.columns.length) r.push('');
+    if (isSuspendedRow(r)) {
+      r[ci] = '';
+      recalcRowStatus(ri);
+      if (typeof showToast === 'function') showToast('Wznowiono sprawę — widać w Arkuszu i WRO', 'success', 2200);
+    } else {
+      r[ci] = 'Zawieszone';
+      if (typeof showToast === 'function') showToast('Sprawa zawieszona — Arkusz + Szafka + WRO', 'info', 2500);
+    }
+    saveData();
     renderViews();
   }
 
@@ -2008,6 +2127,7 @@ const ZobowiazaniModule = (() => {
       };
     });
     persistArchive();
+    if (activated) renderViews();
   }
 
   function prevPerson() {
@@ -2144,17 +2264,88 @@ const ZobowiazaniModule = (() => {
     }
   }
 
-  /* ─── API MODUŁU ──────────────────────────────────────── */
+  function indexSheetPeople(sheet, map) {
+    if (!sheet || !Array.isArray(sheet.rows) || !Array.isArray(sheet.columns)) return;
+    const cols = sheet.columns;
+    const peselI = cols.findIndex(c => /pesel/i.test(String(c || '')));
+    const nipI = cols.findIndex(c => /nip/i.test(String(c || '')));
+    const nameI = cols.findIndex(c => /nazwisk|imi[eę]|osoba|nazwa|zobowi|d[lł]u[zż]nik/i.test(String(c || '')));
+    sheet.rows.forEach((r, i) => {
+      const pesel = peselI >= 0 ? String(r[peselI] || '').replace(/\D/g, '') : '';
+      const nip = nipI >= 0 ? String(r[nipI] || '').replace(/\D/g, '') : '';
+      let name = nameI >= 0 ? String(r[nameI] || '').trim() : '';
+      if (!name && dbSheet === sheet) {
+        try { name = extractPersonInfo(r).name || ''; } catch {}
+      }
+      if (!pesel && !nip) return;
+      const rec = { name: name || (pesel ? ('PESEL ' + pesel) : ('NIP ' + nip)), pesel, nip, rowIndex: i };
+      if (pesel) map[pesel] = rec;
+      if (nip) map[nip] = rec;
+    });
+  }
+
+  function getIdIndex() {
+    const map = {};
+    if (dbSheet) indexSheetPeople(dbSheet, map);
+    if (Object.keys(map).length) return map;
+    try {
+      const raw = localStorage.getItem(AUTOSAVE_KEY);
+      if (!raw) return map;
+      const data = JSON.parse(raw);
+      const sheets = data && data.sheets;
+      if (!Array.isArray(sheets)) return map;
+      const ranked = sheets.slice().sort((a, b) => {
+        const score = s => {
+          let n = (s.rows || []).length;
+          if (/zobowi|rejestr/i.test(String(s.name || ''))) n += 100000;
+          return n;
+        };
+        return score(b) - score(a);
+      });
+      ranked.forEach(s => indexSheetPeople(s, map));
+    } catch {}
+    return map;
+  }
+
+  function lookupById(id) {
+    const want = String(id || '').replace(/\D/g, '');
+    if (!want || want.length < 10) return null;
+    return getIdIndex()[want] || null;
+  }
+
+  function openById(id) {
+    const hit = lookupById(id);
+    if (!hit || !dbSheet) {
+      if (typeof showToast === 'function') showToast('Nie ma takiej osoby w Szafce / Arkuszu', 'info', 2500);
+      return false;
+    }
+    selectRow(hit.rowIndex);
+    return true;
+  }
   async function activate(params = {}) {
     bindArkuszSyncListeners();
+    const savedArchive = loadJsonKey(ARCHIVE_IDS_KEY, {});
+    if (savedArchive && typeof savedArchive === 'object' && !Array.isArray(savedArchive)) {
+      archiveMap = savedArchive;
+    }
     const container = document.getElementById('zobowiazani-app');
     const alreadyLive = activated && dbSheet && container && container.querySelector('.zob-header');
     activated = true;
-    if (alreadyLive) {
-      renderViews();
-      return;
+    if (!alreadyLive) await render();
+    persistZawieszoneStore();
+    const stamped = stampAllUfgFromCepik();
+    if (stamped && typeof showToast === 'function') {
+      showToast('UFG: wpisano datę przy ' + stamped + ' osobach z pojazdem CEPIK', 'success', 2800);
     }
-    await render();
+    if (alreadyLive || stamped) renderViews();
+    const key = params.pesel || params.nip;
+    if (key) {
+      const hit = lookupById(key);
+      if (hit) selectRow(hit.rowIndex);
+      else if (typeof showToast === 'function') {
+        showToast('Brak teczki w Szafce dla ' + key, 'info', 2800);
+      }
+    }
   }
 
   return {
@@ -2176,12 +2367,17 @@ const ZobowiazaniModule = (() => {
     minimizeFolder,
     toggleFocus,
     togglePin,
+    toggleSuspend,
     archivePerson,
     applyArchiveIds,
     openRowMenu,
     openTabMenu,
     syncCepik: syncCepikForPerson,
     syncAllCepik: syncAllCepikFromWro,
+    stampUfgIfCar,
+    lookupById,
+    getIdIndex,
+    openById,
     copyCleanExcel: copyCleanExcelText,
     copy: copyToClipboard,
     loadJsonFile: triggerFilePicker,

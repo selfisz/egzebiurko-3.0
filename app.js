@@ -47,8 +47,9 @@ const SharedStore = (() => {
     SPRAWY:        'sprawy',        // Lista PESEL/NIP z Arkusza
     OGNIVO:        'ognivo',        // { [pesel]: { count, banks[], ts } }
     WRO_STATUS:    'wro_status',    // { [id]: 'analyzed'|'pending' }
-    WRO_CART:      'wro_cart',      // Set→Array of IDs
-    PREFS:         'prefs',         // Ustawienia aplikacji
+    WRO_CART:      'wro_cart',
+    PREFS:         'prefs',
+    ZAWIESZONE:    'zawieszone',    // { [pesel|nip]: { at, name } }
   };
 
   return { get, set, remove, on, KEYS };
