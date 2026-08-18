@@ -26,19 +26,24 @@ const WroModule = (() => {
   /* ─── SYNCHRONIZACJA Z SZAFKĄ (majątek per teczka) ─────── */
   const MAJATEK_KEY = 'egze3_majatek_sync';
 
+  let _majatekMem = null;
   function loadMajatekStore() {
+    if (_majatekMem) return _majatekMem;
     try {
       const raw = localStorage.getItem(MAJATEK_KEY);
       const v = raw ? JSON.parse(raw) : null;
       if (v && typeof v === 'object') {
         if (!v.people || typeof v.people !== 'object') v.people = {};
         if (!Array.isArray(v.pendingGone)) v.pendingGone = [];
+        _majatekMem = v;
         return v;
       }
     } catch {}
-    return { people: {}, pendingGone: [] };
+    _majatekMem = { people: {}, pendingGone: [] };
+    return _majatekMem;
   }
   function saveMajatekStore(store) {
+    _majatekMem = store;
     try { localStorage.setItem(MAJATEK_KEY, JSON.stringify(store)); }
     catch (e) { console.warn('[WRO] zapis majątku nie powiódł się (za duży?)', e); }
   }
@@ -124,6 +129,18 @@ const WroModule = (() => {
   }
   function getSourceCatalog() {
     return matrixColumns.map(k => ({ key: k, icon: icons[k] || '📄', safe: k.replace(/[^a-zA-Z0-9]/g, ''), label: k.replace('Wynik: ', '') }));
+  }
+  function getPersonWroFlags(personKey) {
+    const pk = digitsId(personKey);
+    if (!pk) return { sources: [], dochodMax: 0, pending: false };
+    const snap = getMajatekSnapshot(pk);
+    if (!snap || !snap.sections) return { sources: [], dochodMax: 0, pending: false };
+    const suspended = typeof ZobowiazaniModule !== 'undefined' && typeof ZobowiazaniModule.isSuspended === 'function' && ZobowiazaniModule.isSuspended(pk);
+    return {
+      sources: Object.keys(snap.sections),
+      dochodMax: snap.dochodMax || 0,
+      pending: suspended ? false : sectionsHavePending(pk, snap.sections, snap.entityId),
+    };
   }
 
   function syncToSzafka() {
@@ -331,10 +348,15 @@ const WroModule = (() => {
   /* ─── ADNOTACJE NA WYNIKACH ─────────────────────────────── */
   const ANNOT_LS_KEY = 'egze3_wro_annotations';
 
+  let _annotMem = null;
   function loadAnnotations() {
-    try { return JSON.parse(localStorage.getItem(ANNOT_LS_KEY) || '{}'); } catch { return {}; }
+    if (_annotMem) return _annotMem;
+    try { _annotMem = JSON.parse(localStorage.getItem(ANNOT_LS_KEY) || '{}'); }
+    catch { _annotMem = {}; }
+    return _annotMem;
   }
   function saveAnnotations(obj) {
+    _annotMem = obj;
     localStorage.setItem(ANNOT_LS_KEY, JSON.stringify(obj));
   }
   function buildAnnotKey(pk, sec, iid) {
@@ -1643,7 +1665,7 @@ const WroModule = (() => {
     jumpToMissingEntity, filterMissingFolders,
     getAnnotation, setAnnotationData,
     getMajatekSnapshot, personHasSection, hasPendingItemsForKey,
-    getPendingGoneCount, getSourceCatalog,
+    getPendingGoneCount, getSourceCatalog, getPersonWroFlags,
   };
 })();
 
