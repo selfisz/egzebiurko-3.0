@@ -61,3 +61,23 @@ trafić do kolejki **„⚠️ Przegląd zniknięć”** z pytaniem Archiwizuj /
 To są **w 100% fikcyjne dane** (imiona, PESEL, NIP, adresy, kwoty) — nie odpowiadają
 żadnym realnym osobom czy sprawom. Numery PESEL/NIP nie mają poprawnej sumy kontrolnej,
 ale aplikacja i tak dopasowuje wyłącznie po cyfrach, więc to nie ma znaczenia dla testów.
+
+## Automaty JPK + OGNIVO (sito zrzutni)
+
+W module **Automaty JPK/OGNIVO** można wgrać te same raporty, które makro Excel brało
+z `A:\Automaty\1_Zrzutnia\`. Aplikacja **nie czyta dysku A:** — wskazujesz pliki albo folder.
+
+Mini-zestaw (fikcyjne PESEL-e z bazy 15 osób):
+
+| Plik | Rola |
+|---|---|
+| `ognivo-sita.csv` | wynik OGNIVO (A podmiot, B PESEL, D banki) |
+| `see11-sita.csv` | SEE.11 (C klasyfikacja, F NIP, G PESEL, N klasyfikacja) |
+| `see18-sita.csv` | SEE.18 (H PESEL, K klasyfikacja, L bank/wierzyciel) |
+| `platforma-sita.csv` | Platforma do sita JPK |
+
+Oczekiwany wynik **Analiza OGNIVO**: Anna Nowak (nowy Pekao) i Jan Kowalski (mBank,
+bo w SEE.18 ma K=W). Odrzut C=T / N=W1 / brak w SEE.11 nie przechodzą.
+
+Oczekiwany wynik **Analiza JPK**: jeden wiersz NIP `1111111111` (reszta: kreski,
+brak na białej liście SEE.11 albo dłużnik już w SEE.18).

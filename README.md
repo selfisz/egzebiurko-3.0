@@ -16,6 +16,7 @@ egzebiurko-3.0/
 ├── app.js
 ├── arkusz.js
 ├── ognivo.js
+├── automaty-core.js / automaty.js   ← sito JPK + OGNIVO
 ├── wro.js
 ├── zobowiazani.js
 ├── akumulator.js / rozliczenia.js / przelew.js / balanser.js
@@ -58,6 +59,7 @@ Otwórz `index.html` dwuklikiem. Potem:
 |-------|------|
 | Analityka WRO | baza `.js` / `.json` z makra Excel |
 | OGNIVO | odpowiedzi banków `.xml` |
+| Automaty JPK/OGNIVO | zrzutnia: `OGNIVO*.csv` + `SEE.11` + `SEE.18` (xlsx/csv); JPK dodatkowo `PLATFORMA` |
 | Szafka teczek | baza `.json` / `.js` (przycisk **Wczytaj JSON**) albo dane z Arkusza |
 | Wklepywator Excel (zakładka 1) | generator wierszy Excela + lista zbiorcza / Ctrl+V z programu A |
 | Rozliczenia (zakładka 2) | wbudowany weryfikator EXCEL↔EGA + analizator ZDP |

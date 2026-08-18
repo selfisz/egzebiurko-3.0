@@ -622,6 +622,43 @@ const WroModule = (() => {
     }
   }
 
+  function mergeWynikSection(sectionKey, byId) {
+    if (!sectionKey || !byId || typeof byId !== 'object') return { merged: 0, created: 0 };
+    if (!bazaDanych || typeof bazaDanych !== 'object') bazaDanych = {};
+    let merged = 0;
+    let created = 0;
+    Object.keys(byId).forEach(id => {
+      const pack = byId[id] || {};
+      const headers = Array.isArray(pack.headers) ? pack.headers : [];
+      const rows = Array.isArray(pack.rows) ? pack.rows : [];
+      if (!headers.length && !rows.length) return;
+      const meta = pack.meta || {};
+      const pesel = digitsId(meta.b3 || id);
+      const nip = digitsId(meta.a3 || (pesel.length === 10 ? id : ''));
+      let key = findEntityKey(pesel, nip, pack.name);
+      if (!key) {
+        key = pesel || nip || String(id);
+        if (!bazaDanych[key]) {
+          bazaDanych[key] = {
+            _meta: {
+              a3: nip.length === 10 ? nip : (meta.a3 || ''),
+              b3: pesel.length === 11 ? pesel : (meta.b3 || ''),
+              plik: 'Automaty'
+            }
+          };
+          created++;
+        }
+      }
+      const table = [headers].concat(rows);
+      bazaDanych[key][sectionKey] = table;
+      merged++;
+    });
+    window.WroDatabase = bazaDanych;
+    rebuildEntitiesFromBaza();
+    persistBazaDanych();
+    return { merged, created };
+  }
+
   function importBazaDanych(db, opts) {
     opts = opts || {};
     if (!db || typeof db !== 'object') return false;
@@ -1658,7 +1695,7 @@ const WroModule = (() => {
     renderCart, clearCart, exportProgress, exportMatrixCSV,
     expandAll, collapseAll,
     getCepikInfoForId, getAssetSummaryForPerson, findEntityKey,
-    getBazaDanych, importBazaDanych, openInSzafka,
+    getBazaDanych, importBazaDanych, mergeWynikSection, openInSzafka,
     openAnnotPopover, showAnnotExcludeForm, setAnnotStatus,
     setMinDochod,
     syncToSzafka, reviewGoneQueue, goneDecision,
