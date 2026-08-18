@@ -12,12 +12,302 @@ const WroModule = (() => {
   let bazaDanych = {};
   let entities   = [];
   let activeFilters = new Set();
+  let filterNoFolder = false;
   let currentActiveId = null;
   let activated   = false;
   let _currentAnnotBid = null;
   const _annotBtnCtx = {};
   let _annotBtnSeq = 0;
   let minDochodFilter = 0;
+  let _lookupIndex = null;
+  let _wroFiltered = [];
+  let _wroVirtRaf = 0;
+
+  /* ─── SYNCHRONIZACJA Z SZAFKĄ (majątek per teczka) ─────── */
+  const MAJATEK_KEY = 'egze3_majatek_sync';
+
+  function loadMajatekStore() {
+    try {
+      const raw = localStorage.getItem(MAJATEK_KEY);
+      const v = raw ? JSON.parse(raw) : null;
+      if (v && typeof v === 'object') {
+        if (!v.people || typeof v.people !== 'object') v.people = {};
+        if (!Array.isArray(v.pendingGone)) v.pendingGone = [];
+        return v;
+      }
+    } catch {}
+    return { people: {}, pendingGone: [] };
+  }
+  function saveMajatekStore(store) {
+    try { localStorage.setItem(MAJATEK_KEY, JSON.stringify(store)); }
+    catch (e) { console.warn('[WRO] zapis majątku nie powiódł się (za duży?)', e); }
+  }
+  function todayIsoWro() {
+    return new Date().toISOString().slice(0, 10);
+  }
+  function personKeyForEntity(id) {
+    const data = bazaDanych[id] || {};
+    const meta = data._meta || {};
+    const fromT = idsFromWroTables(data);
+    const a3 = digitsId(meta.a3) || digitsId(fromT.nip);
+    const b3 = digitsId(meta.b3) || digitsId(fromT.pesel);
+    return b3 || a3 || digitsId(id) || null;
+  }
+  function computeMaxDochodFromRows(headers, rows) {
+    const hLower = (headers || []).map(h => String(h || '').toLowerCase());
+    const dochIdx = hLower.findIndex(h => /doch[oó]d|income/i.test(h));
+    let max = 0;
+    (rows || []).forEach(r => {
+      let val = 0;
+      if (dochIdx >= 0) val = parsePolishNum(r[dochIdx]);
+      else val = (r || []).slice(1).map(v => parsePolishNum(v)).filter(n => n > 0 && n < 100000000).reduce((a, b) => Math.max(a, b), 0);
+      if (val > max) max = val;
+    });
+    return max;
+  }
+  function entitySectionsSnapshot(id) {
+    const data = bazaDanych[id] || {};
+    const out = {};
+    Object.keys(data).forEach(k => {
+      if (k === '_meta') return;
+      const rows = data[k];
+      if (!Array.isArray(rows) || rows.length <= 1) return;
+      out[k] = { updatedAt: todayIsoWro(), headers: rows[0], rows: rows.slice(1) };
+    });
+    return out;
+  }
+  function sectionsHavePending(personKey, sections, entityId) {
+    const annots = loadAnnotations();
+    for (const src of Object.keys(sections)) {
+      if (!src.startsWith('Wynik:')) continue;
+      const safe = src.replace(/[^a-zA-Z0-9]/g, '');
+      for (const row of (sections[src].rows || [])) {
+        const fp = row.slice(0, 5).map(v => String(v || '')).join('||');
+        const ann = annots[buildAnnotKey(personKey, safe, fp)];
+        if (!ann || (ann.status !== 'done' && ann.status !== 'excluded')) return true;
+      }
+    }
+    try {
+      const ognivoData = SharedStore.get(SharedStore.KEYS.OGNIVO, {});
+      const entry = ognivoData[entityId] || ognivoData[personKey];
+      if (entry && Array.isArray(entry.banks)) {
+        for (const b of entry.banks) {
+          const ann = annots[buildAnnotKey(personKey, 'OGNIVOStore', b)];
+          if (!ann || (ann.status !== 'done' && ann.status !== 'excluded')) return true;
+        }
+      }
+    } catch {}
+    return false;
+  }
+
+  function getMajatekSnapshot(personKey) {
+    const pk = digitsId(personKey);
+    if (!pk) return null;
+    return loadMajatekStore().people[pk] || null;
+  }
+  function personHasSection(personKey, sectionKey) {
+    const snap = getMajatekSnapshot(personKey);
+    return !!(snap && snap.sections && snap.sections[sectionKey]);
+  }
+  function hasPendingItemsForKey(personKey) {
+    const pk = digitsId(personKey);
+    if (!pk) return false;
+    if (typeof ZobowiazaniModule !== 'undefined' && typeof ZobowiazaniModule.isSuspended === 'function' && ZobowiazaniModule.isSuspended(pk)) {
+      return false;
+    }
+    const snap = getMajatekSnapshot(pk);
+    if (!snap || !snap.sections) return false;
+    return sectionsHavePending(pk, snap.sections, snap.entityId);
+  }
+  function getPendingGoneCount() {
+    return loadMajatekStore().pendingGone.length;
+  }
+  function getSourceCatalog() {
+    return matrixColumns.map(k => ({ key: k, icon: icons[k] || '📄', safe: k.replace(/[^a-zA-Z0-9]/g, ''), label: k.replace('Wynik: ', '') }));
+  }
+
+  function syncToSzafka() {
+    if (!Object.keys(bazaDanych).length) {
+      if (typeof showToast === 'function') showToast('Najpierw wczytaj plik bazy WRO', 'info', 2500);
+      return;
+    }
+    if (typeof ZobowiazaniModule === 'undefined' || typeof ZobowiazaniModule.getIdIndex !== 'function') {
+      if (typeof showToast === 'function') showToast('Szafka teczek niedostępna — otwórz najpierw kartę Zobowiązani', 'error', 3000);
+      return;
+    }
+    const idIndex = ZobowiazaniModule.getIdIndex();
+    const store = loadMajatekStore();
+    let addedN = 0, updatedN = 0, newsN = 0;
+    const missingList = [];
+
+    entities.forEach(({ id }) => {
+      const pk = personKeyForEntity(id);
+      const hit = pk ? idIndex[pk] : null;
+      if (!hit) {
+        missingList.push({ id, name: resolveEntityView(id, idIndex).displayName });
+        return;
+      }
+      const prev = store.people[pk];
+      const sections = entitySectionsSnapshot(id);
+
+      if (prev && prev.sections) {
+        Object.keys(prev.sections).forEach(secKey => {
+          if (!sections[secKey]) {
+            const dup = store.pendingGone.find(g => g.personKey === pk && g.section === secKey);
+            if (!dup) {
+              store.pendingGone.push({
+                personKey: pk,
+                name: hit.name || pk,
+                section: secKey,
+                oldCount: (prev.sections[secKey].rows || []).length,
+                at: new Date().toISOString(),
+              });
+            }
+          }
+        });
+      }
+
+      const dochodMax = sections['Dochody']
+        ? computeMaxDochodFromRows(sections['Dochody'].headers, sections['Dochody'].rows)
+        : (prev ? (prev.dochodMax || 0) : 0);
+
+      store.people[pk] = { entityId: id, lastSyncAt: new Date().toISOString(), sections, dochodMax };
+      if (prev) updatedN++; else addedN++;
+
+      const suspended = typeof ZobowiazaniModule.isSuspended === 'function' && ZobowiazaniModule.isSuspended(pk);
+      if (!suspended && sectionsHavePending(pk, sections, id)) newsN++;
+    });
+
+    saveMajatekStore(store);
+    if (typeof ZobowiazaniModule !== 'undefined' && ZobowiazaniModule.refreshAfterWroSync) ZobowiazaniModule.refreshAfterWroSync();
+    showSyncSummaryDialog({ added: addedN, updated: updatedN, missing: missingList, news: newsN, goneCount: store.pendingGone.length });
+  }
+
+  let _lastMissingList = [];
+
+  function showSyncSummaryDialog(summary) {
+    _lastMissingList = summary.missing || [];
+    let dlg = document.getElementById('wro-sync-dlg');
+    if (!dlg) {
+      dlg = document.createElement('div');
+      dlg.id = 'wro-sync-dlg';
+      document.body.appendChild(dlg);
+    }
+    const missRows = summary.missing.slice(0, 25).map((m, i) => `
+      <button type="button" class="wro-missing-row" onclick="WroModule.jumpToMissingEntity(${i})">
+        <span>${escWro(m.name)}</span><span class="wro-missing-go">Otwórz w WRO →</span>
+      </button>`).join('');
+    const missHtml = summary.missing.length
+      ? `<div class="wro-ldlg-note" style="text-align:left;padding:6px">
+          <div style="font-weight:700;margin-bottom:6px;padding:0 6px">📂 Bez teczki w Szafce — kliknij, aby otworzyć i dopasować ręcznie:</div>
+          <div class="wro-missing-list">${missRows}</div>
+          ${summary.missing.length > 25 ? `<div style="padding:6px 6px 0;font-size:.75rem">…i ${summary.missing.length - 25} więcej — użyj filtra „Bez teczki” w WRO.</div>` : ''}
+        </div>`
+      : '';
+    dlg.innerHTML = `
+      <div class="wro-ldlg-overlay" onclick="document.getElementById('wro-sync-dlg').style.display='none'">
+        <div class="wro-ldlg-box" onclick="event.stopPropagation()">
+          <div class="wro-ldlg-title">🔄 Synchronizacja z Szafką</div>
+          <div class="wro-ldlg-grid">
+            <div class="wro-ldlg-card wro-ldlg-done"><div class="wro-ldlg-num">${summary.added}</div><div class="wro-ldlg-lbl">✅ dodanych</div></div>
+            <div class="wro-ldlg-card"><div class="wro-ldlg-num">${summary.updated}</div><div class="wro-ldlg-lbl">🔁 zaktualizowanych</div></div>
+            <div class="wro-ldlg-card wro-ldlg-todo"><div class="wro-ldlg-num">${summary.news}</div><div class="wro-ldlg-lbl">🔥 z nowością</div></div>
+            <div class="wro-ldlg-card wro-ldlg-partial"><div class="wro-ldlg-num">${summary.missing.length}</div><div class="wro-ldlg-lbl">📂 brakuje teczki</div></div>
+          </div>
+          ${missHtml}
+          ${summary.goneCount > 0 ? `<div class="wro-ldlg-note wro-ldlg-first">⚠️ ${summary.goneCount} zniknięć do przeglądu — dane, które osoba miała wcześniej, a już ich nie ma w tym raporcie.</div>` : ''}
+          <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
+            ${summary.goneCount > 0 ? `<button class="wro-ldlg-close" style="flex:1;background:#b45309" onclick="document.getElementById('wro-sync-dlg').style.display='none';WroModule.reviewGoneQueue()">Przejrzyj zniknięcia (${summary.goneCount})</button>` : ''}
+            ${summary.missing.length > 0 ? `<button class="wro-ldlg-close" style="flex:1;background:#475569" onclick="document.getElementById('wro-sync-dlg').style.display='none';WroModule.filterMissingFolders()">Filtruj listę: bez teczki</button>` : ''}
+            <button class="wro-ldlg-close" style="flex:1" onclick="document.getElementById('wro-sync-dlg').style.display='none'">Zamknij</button>
+          </div>
+        </div>
+      </div>`;
+    dlg.style.display = 'block';
+    refreshSyncButtons();
+  }
+
+  function jumpToMissingEntity(idx) {
+    const item = _lastMissingList[idx];
+    if (!item) return;
+    const dlg = document.getElementById('wro-sync-dlg');
+    if (dlg) dlg.style.display = 'none';
+    selectEntity(item.id);
+  }
+
+  function filterMissingFolders() {
+    filterNoFolder = true;
+    const chip = document.querySelector('.wro-chip-warn');
+    if (chip) chip.classList.add('active');
+    renderList(document.getElementById('wro-search')?.value || '');
+  }
+
+  function reviewGoneQueue() {
+    const store = loadMajatekStore();
+    if (!store.pendingGone.length) {
+      if (typeof showToast === 'function') showToast('Brak zniknięć do przeglądu', 'info', 2200);
+      return;
+    }
+    renderGoneReview();
+  }
+
+  function renderGoneReview() {
+    const store = loadMajatekStore();
+    let dlg = document.getElementById('wro-gone-dlg');
+    if (!dlg) {
+      dlg = document.createElement('div');
+      dlg.id = 'wro-gone-dlg';
+      document.body.appendChild(dlg);
+    }
+    if (!store.pendingGone.length) {
+      dlg.style.display = 'none';
+      if (typeof showToast === 'function') showToast('Przegląd zniknięć zakończony', 'success', 2200);
+      refreshSyncButtons();
+      return;
+    }
+    const total = store.pendingGone.length;
+    const item = store.pendingGone[0];
+    dlg.innerHTML = `
+      <div class="wro-ldlg-overlay">
+        <div class="wro-ldlg-box" style="max-width:440px">
+          <div class="wro-ldlg-title">⚠️ Zniknięcie danych (1/${total})</div>
+          <p style="margin:0 0 14px;color:var(--text);font-size:.92rem">
+            <strong>${escWro(item.name)}</strong> miał(a) wcześniej dane w sekcji <strong>${escWro(item.section.replace('Wynik: ', ''))}</strong>
+            (${item.oldCount} wpis${item.oldCount === 1 ? '' : 'ów'}), a w nowym raporcie już ich nie ma.
+          </p>
+          <p style="margin:0 0 16px;color:var(--muted);font-size:.82rem">Zamknąć sprawę i przenieść teczkę do Archiwum, czy zostawić otwartą?</p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="wro-ldlg-close" style="flex:1;background:#b91c1c" onclick="WroModule.goneDecision('archive')">📦 Archiwizuj teczkę</button>
+            <button class="wro-ldlg-close" style="flex:1;background:#16a34a" onclick="WroModule.goneDecision('leave')">✅ Zostaw otwartą</button>
+          </div>
+          <button class="wro-ldlg-close" style="width:100%;margin-top:8px;background:var(--panel2);color:var(--text);border:1px solid var(--line)" onclick="document.getElementById('wro-gone-dlg').style.display='none'">Przerwij przegląd (dokończę później)</button>
+        </div>
+      </div>`;
+    dlg.style.display = 'block';
+  }
+
+  function goneDecision(decision) {
+    const store = loadMajatekStore();
+    const item = store.pendingGone[0];
+    if (item) {
+      if (decision === 'archive' && typeof ZobowiazaniModule !== 'undefined' && typeof ZobowiazaniModule.archiveByKey === 'function') {
+        ZobowiazaniModule.archiveByKey(item.personKey, { reason: 'WRO: zniknęły dane (' + item.section.replace('Wynik: ', '') + ')' });
+      }
+      store.pendingGone.shift();
+      saveMajatekStore(store);
+      if (typeof ZobowiazaniModule !== 'undefined' && ZobowiazaniModule.refreshAfterWroSync) ZobowiazaniModule.refreshAfterWroSync();
+    }
+    renderGoneReview();
+  }
+
+  function refreshSyncButtons() {
+    const btn = document.getElementById('wro-gone-btn');
+    if (!btn) return;
+    const n = getPendingGoneCount();
+    btn.style.display = n > 0 ? '' : 'none';
+    const num = btn.querySelector('.wro-cart-counter');
+    if (num) num.textContent = n;
+  }
 
   const icons = {
     "Raporter":"📊","STIR":"🏦","Księgi Wieczyste":"🏢",
@@ -133,6 +423,14 @@ const WroModule = (() => {
               <input type="file" id="wro-file-input" accept=".js,.json,.txt" style="display:none">
             </label>
 
+            <button class="wro-cart-btn" style="background:#0f766e" onclick="WroModule.syncToSzafka()" title="Wgrane dane nie trafiają do Szafki automatycznie — dopiero po kliknięciu tutaj">
+              🔄 Synchronizuj z Szafką
+            </button>
+            <button class="wro-cart-btn" id="wro-gone-btn" style="background:#b45309;display:none" onclick="WroModule.reviewGoneQueue()">
+              ⚠️ Przegląd zniknięć
+              <span class="wro-cart-counter">0</span>
+            </button>
+
             <div class="wro-progress-row">
               <button class="wro-prog-btn" onclick="WroModule.exportProgress()">💾 Zapisz postęp</button>
               <label class="wro-prog-btn">
@@ -186,6 +484,7 @@ const WroModule = (() => {
     bindEvents();
     initFilters();
     if (entities.length > 0) renderList('');
+    refreshSyncButtons();
   }
 
   function bindEvents() {
@@ -278,6 +577,15 @@ const WroModule = (() => {
       const avail = Object.keys(bazaDanych[id]).filter(k => k !== '_meta' && bazaDanych[id][k].length > 1);
       return { id, availableSources: avail, sourceCount: avail.length };
     }).sort((a, b) => b.sourceCount - a.sourceCount || a.id.localeCompare(b.id));
+    _lookupIndex = Object.create(null);
+    entities.forEach(item => {
+      const ent = bazaDanych[item.id];
+      const meta = (ent && ent._meta) || {};
+      [item.id, meta.a3, meta.b3].forEach(v => {
+        const d = String(v || '').replace(/\D/g, '');
+        if (d && !_lookupIndex[d]) _lookupIndex[d] = item.id;
+      });
+    });
   }
 
   function persistBazaDanych() {
@@ -445,6 +753,16 @@ const WroModule = (() => {
     const fc = document.getElementById('wro-filters');
     if (!fc) return;
     fc.innerHTML = '';
+    const noFolderChip = document.createElement('div');
+    noFolderChip.className = 'wro-chip wro-chip-warn' + (filterNoFolder ? ' active' : '');
+    noFolderChip.innerHTML = '🗂 Bez teczki w Szafce';
+    noFolderChip.title = 'Podmioty bez dopasowanej teczki (PESEL/NIP) w Szafce';
+    noFolderChip.onclick = () => {
+      filterNoFolder = !filterNoFolder;
+      noFolderChip.classList.toggle('active', filterNoFolder);
+      renderList(document.getElementById('wro-search')?.value || '');
+    };
+    fc.appendChild(noFolderChip);
     sourceNames.forEach(src => {
       const chip = document.createElement('div');
       chip.className = 'wro-chip';
@@ -465,6 +783,7 @@ const WroModule = (() => {
     if (!listEl) return;
 
     if (!entities.length) {
+      _wroFiltered = [];
       listEl.innerHTML = '<div class="wro-empty-list">Brak wczytanych danych.</div>';
       return;
     }
@@ -476,70 +795,110 @@ const WroModule = (() => {
       ? ZobowiazaniModule.getIdIndex()
       : {};
 
-    const filtered = entities.filter(item => {
-      const view = resolveEntityView(item.id, arkIndex);
-      const blob = [item.id, view.displayName, view.a3, view.b3, view.person && view.person.name].filter(Boolean).join(' ').toLowerCase();
-      const matchText = !lf || blob.includes(lf);
-      let matchFilters = true;
+    _wroFiltered = entities.filter(item => {
       if (activeFilters.size > 0) {
         for (const req of activeFilters) {
-          if (!item.availableSources.includes(req)) { matchFilters = false; break; }
+          if (!item.availableSources.includes(req)) return false;
         }
       }
-      const matchDochod = !minDochodFilter || getMaxDochodForEntity(item.id) >= minDochodFilter;
-      return matchText && matchFilters && matchDochod;
+      if (minDochodFilter && getMaxDochodForEntity(item.id) < minDochodFilter) return false;
+      if (filterNoFolder) {
+        const view = resolveEntityView(item.id, arkIndex);
+        item._view = view;
+        if (view.person) return false;
+      }
+      if (!lf) return true;
+      const view = item._view || resolveEntityView(item.id, arkIndex);
+      item._view = view;
+      const blob = [item.id, view.displayName, view.a3, view.b3, view.person && view.person.name].filter(Boolean).join(' ').toLowerCase();
+      return blob.includes(lf);
     });
 
-    listEl.innerHTML = filtered.map(item => {
-      const isAnalyzed = analyzed.has(item.id);
-      const inCart     = cart.has(item.id);
-      const isActive   = currentActiveId === item.id;
-      const view = resolveEntityView(item.id, arkIndex);
-      const stubMark = view.stub ? '<span class="wro-stub-chip" title="Tylko OGNIVO/AUM — brak raportu WRO">bez WRO</span>' : '';
-      const fromArk = view.person ? '<span class="wro-stub-chip ark" title="Dopasowano z Arkusza">teczka</span>' : '';
+    bindWroListEvents(listEl);
+    listEl.dataset.virt = '1';
+    if (!listEl.querySelector('#wro-virt-spacer')) {
+      listEl.innerHTML = `<div class="wro-virt" id="wro-virt"><div class="wro-virt-spacer" id="wro-virt-spacer"></div><div class="wro-virt-window" id="wro-virt-window"></div></div>`;
+    }
+    paintWroWindow(listEl, analyzed, cart);
+  }
 
-      const folderIco = `<span class="wro-icon-jump wro-open-teczka" data-entity="${escWro(item.id)}" data-open-teczka="1" title="${view.person ? 'Otwórz teczkę w Szafce' : 'Szukaj teczki w Szafce'}">📂</span>`;
-      const statusBadges = (inCart ? '🛒 ' : '') + (isAnalyzed ? '✅' : '');
-      const maxDochod = item.availableSources.includes('Dochody') ? getMaxDochodForEntity(item.id) : 0;
-      const dochodBadge = maxDochod > 0
-        ? `<span class="wro-dochod-badge${maxDochod >= 60000 ? ' high' : ''}" title="Maks. dochód roczny z PIT">💰 ${formatPln(maxDochod)}</span>`
-        : '';
-      const iconsHtml = item.availableSources.map(s => {
-        const safe = s.replace(/[^a-zA-Z0-9]/g,'');
-        const style = s.startsWith('Wynik:') ? 'color:#ef4444;font-weight:bold;' : '';
-        return `<span class="wro-icon-jump" style="${style}" data-entity="${item.id}" data-section="${safe}" title="${s}">${icons[s]||'📄'}</span>`;
-      }).join('');
-
-      return `
-        <div class="wro-list-item ${isAnalyzed ? 'is-analyzed' : ''} ${isActive ? 'active' : ''} ${view.stub ? 'is-stub' : ''}" data-id="${escWro(item.id)}">
-          <div class="wro-list-title">
-            <span title="${escWro(item.id)}">${escWro(view.displayName)}</span>
-            <span>${statusBadges}${dochodBadge}${stubMark}${fromArk}</span>
-          </div>
-          <div class="wro-list-score">${folderIco} ${iconsHtml}</div>
-        </div>
-      `;
+  function wroItemHtml(item, analyzed, cart) {
+    const isAnalyzed = analyzed.has(item.id);
+    const inCart     = cart.has(item.id);
+    const isActive   = currentActiveId === item.id;
+    const view = item._view || resolveEntityView(item.id);
+    const stubMark = view.stub ? '<span class="wro-stub-chip" title="Tylko OGNIVO/AUM — brak raportu WRO">bez WRO</span>' : '';
+    const fromArk = view.person ? '<span class="wro-stub-chip ark" title="Dopasowano z Arkusza">teczka</span>' : '';
+    const folderIco = `<span class="wro-icon-jump wro-open-teczka" data-entity="${escWro(item.id)}" data-open-teczka="1" title="${view.person ? 'Otwórz teczkę w Szafce' : 'Szukaj teczki w Szafce'}">📂</span>`;
+    const statusBadges = (inCart ? '🛒 ' : '') + (isAnalyzed ? '✅' : '');
+    const maxDochod = item.availableSources.includes('Dochody') ? getMaxDochodForEntity(item.id) : 0;
+    const dochodBadge = maxDochod > 0
+      ? `<span class="wro-dochod-badge${maxDochod >= 60000 ? ' high' : ''}" title="Maks. dochód roczny z PIT">💰 ${formatPln(maxDochod)}</span>`
+      : '';
+    const iconsHtml = item.availableSources.map(s => {
+      const safe = s.replace(/[^a-zA-Z0-9]/g,'');
+      const style = s.startsWith('Wynik:') ? 'color:#ef4444;font-weight:bold;' : '';
+      return `<span class="wro-icon-jump" style="${style}" data-entity="${escWro(item.id)}" data-section="${safe}" title="${s}">${icons[s]||'📄'}</span>`;
     }).join('');
 
-    // Bind click events
-    listEl.querySelectorAll('.wro-list-item').forEach(el => {
-      el.addEventListener('click', ev => {
-        if (ev.target.classList.contains('wro-icon-jump')) return;
-        selectEntity(el.dataset.id);
-      });
-    });
-    listEl.querySelectorAll('.wro-icon-jump').forEach(el => {
-      el.addEventListener('click', ev => {
+    return `
+      <div class="wro-list-item ${isAnalyzed ? 'is-analyzed' : ''} ${isActive ? 'active' : ''} ${view.stub ? 'is-stub' : ''}" data-id="${escWro(item.id)}">
+        <div class="wro-list-title">
+          <span title="${escWro(item.id)}">${escWro(view.displayName)}</span>
+          <span>${statusBadges}${dochodBadge}${stubMark}${fromArk}</span>
+        </div>
+        <div class="wro-list-score">${folderIco} ${iconsHtml}</div>
+      </div>`;
+  }
+
+  function paintWroWindow(listEl, analyzed, cart) {
+    listEl = listEl || document.getElementById('wro-list');
+    const spacer = document.getElementById('wro-virt-spacer');
+    const win = document.getElementById('wro-virt-window');
+    if (!listEl || !spacer || !win) return;
+    analyzed = analyzed || getAnalyzed();
+    cart = cart || getCart();
+    const rowH = 72;
+    const overscan = 8;
+    const n = _wroFiltered.length;
+    spacer.style.height = (n * rowH) + 'px';
+    const start = Math.max(0, Math.floor(listEl.scrollTop / rowH) - overscan);
+    const end = Math.min(n, Math.ceil((listEl.scrollTop + (listEl.clientHeight || 480)) / rowH) + overscan);
+    win.style.transform = 'translateY(' + (start * rowH) + 'px)';
+    const arkIndex = (typeof ZobowiazaniModule !== 'undefined' && typeof ZobowiazaniModule.getIdIndex === 'function')
+      ? ZobowiazaniModule.getIdIndex()
+      : {};
+    let html = '';
+    for (let i = start; i < end; i++) {
+      const item = _wroFiltered[i];
+      if (!item._view) item._view = resolveEntityView(item.id, arkIndex);
+      html += wroItemHtml(item, analyzed, cart);
+    }
+    win.innerHTML = html || (n ? '' : '<div class="wro-empty-list">Brak wyników.</div>');
+  }
+
+  function bindWroListEvents(listEl) {
+    if (!listEl || listEl._wroBound) return;
+    listEl._wroBound = true;
+    listEl.addEventListener('click', ev => {
+      const jump = ev.target.closest('.wro-icon-jump');
+      if (jump) {
         ev.stopPropagation();
-        const id = el.dataset.entity;
-        if (el.dataset.openTeczka) {
-          openInSzafka(id);
-          return;
-        }
-        const sec = el.dataset.section;
-        selectEntity(id, sec);
-      });
+        const id = jump.dataset.entity;
+        if (jump.dataset.openTeczka) { openInSzafka(id); return; }
+        selectEntity(id, jump.dataset.section);
+        return;
+      }
+      const row = ev.target.closest('.wro-list-item');
+      if (row && row.dataset.id) selectEntity(row.dataset.id);
     });
+    listEl.addEventListener('scroll', () => {
+      if (_wroVirtRaf) return;
+      _wroVirtRaf = requestAnimationFrame(() => {
+        _wroVirtRaf = 0;
+        paintWroWindow(listEl);
+      });
+    }, { passive: true });
   }
 
   function selectEntity(id, scrollToSection = null) {
@@ -1017,9 +1376,13 @@ const WroModule = (() => {
     const tries = [pesel, nip, digitsId(pesel), digitsId(nip)].filter(Boolean);
     for (const t of tries) {
       if (db[t]) return t;
+      const d = digitsId(t);
+      if (d && _lookupIndex && _lookupIndex[d]) return _lookupIndex[d];
     }
     const want = new Set(tries.map(digitsId).filter(d => d.length >= 10));
     const nameLc = String(name || '').trim().toLowerCase();
+    if (nameLc && db[name]) return name;
+    if (!want.size && !nameLc) return null;
     const keys = Object.keys(db);
     for (let i = 0; i < keys.length; i++) {
       const k = keys[i];
@@ -1104,13 +1467,14 @@ const WroModule = (() => {
   function activate(params = {}) {
     if (!activated) { activated = true; }
     tryLoadPersistedBaza();
-    render();
+    const live = document.getElementById('wro-list');
+    if (!live) render();
 
     if (params.pesel || params.nip) {
       const id = findEntityKey(params.pesel, params.nip) || params.pesel || params.nip;
       if (bazaDanych[id]) {
         const sec = params.section ? String(params.section).replace(/[^a-zA-Z0-9]/g, '') : null;
-        setTimeout(() => selectEntity(id, sec), 100);
+        setTimeout(() => selectEntity(id, sec), 40);
       } else {
         showToast('ℹ️ Brak tej osoby w bazie WRO — wczytaj plik bazy', 'info');
       }
@@ -1196,22 +1560,14 @@ const WroModule = (() => {
     if (!id || !db) return null;
     const clean = String(id).replace(/\D/g, '');
     if (!clean && typeof id !== 'string') return null;
-    
-    // Szukamy po kluczu bezpośrednim lub po polach NIP/PESEL wewnątrz encji
+
     let entity = db[id] || (clean ? db[clean] : null);
+    if (!entity && clean && _lookupIndex && _lookupIndex[clean]) {
+      entity = db[_lookupIndex[clean]];
+    }
     if (!entity && clean) {
-      const keys = Object.keys(db);
-      for (const k of keys) {
-        const ent = db[k];
-        if (!ent) continue;
-        const meta = ent._meta || {};
-        const a3 = String(meta.a3 || '').replace(/\D/g, '');
-        const b3 = String(meta.b3 || '').replace(/\D/g, '');
-        if (k.replace(/\D/g, '') === clean || (a3 && a3 === clean) || (b3 && b3 === clean)) {
-          entity = ent;
-          break;
-        }
-      }
+      const mapped = _lookupIndex && _lookupIndex[clean];
+      if (mapped) entity = db[mapped];
     }
     if (!entity || !entity['UFG CEPIK'] || entity['UFG CEPIK'].length <= 1) {
       return null;
@@ -1282,7 +1638,12 @@ const WroModule = (() => {
     getCepikInfoForId, getAssetSummaryForPerson, findEntityKey,
     getBazaDanych, importBazaDanych, openInSzafka,
     openAnnotPopover, showAnnotExcludeForm, setAnnotStatus,
-    setMinDochod
+    setMinDochod,
+    syncToSzafka, reviewGoneQueue, goneDecision,
+    jumpToMissingEntity, filterMissingFolders,
+    getAnnotation, setAnnotationData,
+    getMajatekSnapshot, personHasSection, hasPendingItemsForKey,
+    getPendingGoneCount, getSourceCatalog,
   };
 })();
 

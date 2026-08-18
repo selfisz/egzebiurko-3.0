@@ -568,6 +568,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
 }
 .wro-chip:hover{background:rgba(255,255,255,.12);color:#d0e4f5}
 .wro-chip.active{background:var(--accent);color:#fff;border-color:var(--accent);font-weight:650}
+.wro-chip-warn.active{background:#b45309;border-color:#b45309;color:#fff}
 .wro-list{flex:1;overflow-y:auto;min-height:0}
 .wro-list::-webkit-scrollbar{width:6px}
 .wro-list::-webkit-scrollbar-thumb{background:#374151;border-radius:3px}
@@ -801,7 +802,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
 .wro-dochod-badge.high{background:#dcfce7;color:#166534;border-color:#86efac}
 
 /* ── Load summary dialog ── */
-#wro-load-dlg{display:none;position:fixed;inset:0;z-index:10000}
+#wro-load-dlg, #wro-sync-dlg, #wro-gone-dlg{display:none;position:fixed;inset:0;z-index:10000}
 .wro-ldlg-overlay{
   position:absolute;inset:0;background:rgba(0,0,0,.45);
   display:flex;align-items:center;justify-content:center;
@@ -826,6 +827,15 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
   padding:8px 12px;background:var(--zebra);border-radius:6px;margin-bottom:12px;
 }
 .wro-ldlg-first{color:var(--accent)}
+.wro-missing-list{max-height:180px;overflow-y:auto;display:flex;flex-direction:column;gap:4px}
+.wro-missing-row{
+  display:flex;align-items:center;justify-content:space-between;gap:10px;
+  width:100%;text-align:left;background:var(--panel);border:1px solid var(--line);
+  border-radius:7px;padding:7px 10px;font:inherit;font-size:.8rem;color:var(--text);
+  cursor:pointer;transition:.15s;
+}
+.wro-missing-row:hover{border-color:var(--accent);background:var(--soft)}
+.wro-missing-go{font-size:.72rem;font-weight:700;color:var(--accent);flex-shrink:0;white-space:nowrap}
 .wro-ldlg-close{
   width:100%;padding:10px;background:var(--accent);color:#fff;
   border:none;border-radius:8px;font-size:.9rem;font-weight:600;cursor:pointer;
@@ -1123,6 +1133,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
   width:100%; box-sizing:border-box; text-align:left;
   padding:9px 12px; border:0; border-bottom:1px solid var(--zob-edge);
   background:transparent; color:var(--zob-ink); cursor:pointer; font:inherit;
+  min-height:52px;
 }
 .zob-person-row:nth-child(even){background:color-mix(in srgb, var(--zob-paper) 55%, transparent)}
 .zob-person-row:hover{background:color-mix(in srgb, var(--zob-paper2) 80%, #fff)}
@@ -1162,7 +1173,22 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
   border:1px solid var(--zob-edge); border-radius:999px; padding:2px 8px; letter-spacing:0;
   text-transform:none;
 }
-.zob-folder-scroll{flex:1; overflow:auto; min-height:0}
+.zob-virt{position:relative;width:100%}
+.zob-virt-spacer{width:100%;pointer-events:none}
+.zob-virt-window{position:absolute;top:0;left:0;right:0;will-change:transform}
+.zob-fresh-mark{
+  display:inline-block;margin-left:6px;font-size:.58rem;font-weight:800;letter-spacing:.04em;
+  text-transform:uppercase;padding:1px 6px;border-radius:999px;vertical-align:middle;
+  background:color-mix(in srgb, var(--zob-olive) 22%, #fff); color:var(--zob-olive);
+  border:1px solid color-mix(in srgb, var(--zob-olive) 35%, transparent);
+}
+.zob-person-row.is-fresh,.zob-reg-table tbody tr.is-fresh td{
+  background:color-mix(in srgb, var(--zob-olive) 8%, var(--zob-cream)) !important;
+}
+.wro-virt{position:relative;width:100%}
+.wro-virt-spacer{width:100%;pointer-events:none}
+.wro-virt-window{position:absolute;top:0;left:0;right:0;will-change:transform}
+.wro-list-item{min-height:71px;box-sizing:border-box}
 .zob-folder-empty{
   padding:28px 16px; text-align:center; color:var(--zob-ink-soft); font-size:.85rem; line-height:1.4;
 }
@@ -1181,6 +1207,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
 .zob-reg-table thead th .sort-ind{opacity:.55; margin-left:4px; font-size:.65rem}
 .zob-reg-table tbody tr{
   cursor:pointer; transition: background .12s;
+  height:37px;
 }
 .zob-reg-table tbody tr:nth-child(even) td{background:color-mix(in srgb, var(--zob-paper) 55%, transparent)}
 .zob-reg-table tbody tr:hover td{background:color-mix(in srgb, var(--zob-paper2) 80%, #fff)}

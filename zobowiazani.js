@@ -43,7 +43,18 @@ const ZobowiazaniModule = (() => {
   let archiveMap = loadJsonKey(ARCHIVE_IDS_KEY, {});
   if (!Array.isArray(deskPins)) deskPins = [];
   if (!archiveMap || typeof archiveMap !== 'object' || Array.isArray(archiveMap)) archiveMap = {};
+  /** @type {Set<string>} PESEL/NIP dodane ostatnim „Dodaj do bazy” */
+  let freshKeys = new Set();
+  let _filterCache = { key: '', rows: null };
+  let _personColCache = { sheet: null, len: -1, map: null };
+  let _virtBound = false;
+  let _virtRaf = 0;
   restoreOpenTabs();
+
+  function invalidateListCache() {
+    _filterCache = { key: '', rows: null };
+    _personColCache = { sheet: null, len: -1, map: null };
+  }
 
   function loadJsonKey(key, fallback) {
     try {
@@ -289,6 +300,7 @@ const ZobowiazaniModule = (() => {
     if (!Array.isArray(dbSheet.rows)) dbSheet.rows = [];
     if (!Array.isArray(dbSheet.columns)) dbSheet.columns = [];
     ensureSystemColumns(dbSheet);
+    invalidateListCache();
     return true;
   }
 
@@ -339,25 +351,29 @@ const ZobowiazaniModule = (() => {
 
     const raw = await new Promise((resolve, reject) => {
       let intervalId;
+      let done = false;
+      const finish = (fn, val) => {
+        if (done) return;
+        done = true;
+        window.removeEventListener('message', handler);
+        clearInterval(intervalId);
+        fn(val);
+      };
       const handler = (e) => {
-        if (e.data && e.data.type === 'DB_DATA') {
-          window.removeEventListener('message', handler);
-          clearInterval(intervalId);
-          resolve(e.data.payload);
-        }
+        if (e.data && e.data.type === 'DB_DATA') finish(resolve, e.data.payload);
       };
       window.addEventListener('message', handler);
 
-      intervalId = setInterval(() => {
+      const ping = () => {
         if (frame && frame.contentWindow) {
           frame.contentWindow.postMessage({ type: 'GET_DB' }, '*');
         }
-      }, 2000);
+      };
+      ping();
+      intervalId = setInterval(ping, 400);
 
       setTimeout(() => {
-        window.removeEventListener('message', handler);
-        clearInterval(intervalId);
-        reject(new Error('Brak odpowiedzi od Arkusza (timeout).'));
+        finish(reject, new Error('Brak odpowiedzi od Arkusza (timeout).'));
       }, timeoutMs);
     });
 
@@ -367,6 +383,7 @@ const ZobowiazaniModule = (() => {
       throw new Error('Arkusz nie zawiera arkusza z danymi');
     }
     _lastSyncedAt = parsed.savedAt || '';
+    invalidateListCache();
     return true;
   }
 
@@ -683,6 +700,7 @@ const ZobowiazaniModule = (() => {
 
   function saveData() {
     if (!dbData || !dbSheet) return;
+    invalidateListCache();
     try {
       dbData.savedAt = new Date().toISOString();
       _lastSyncedAt = dbData.savedAt;
@@ -811,30 +829,16 @@ const ZobowiazaniModule = (() => {
   }
 
   /* ─── INTELIGENTNA EKSTRAKCJA DANYCH OSOBOWYCH ──────────── */
-  function extractPersonInfo(row) {
-    const cols = dbSheet.columns || [];
-    
-    const getColVal = (idx) => {
-      return (idx >= 0 && idx < row.length) ? String(row[idx] || '').trim() : '';
+  function getPersonColMap() {
+    const cols = (dbSheet && dbSheet.columns) || [];
+    if (_personColCache.sheet === dbSheet && _personColCache.len === cols.length && _personColCache.map) {
+      return _personColCache.map;
+    }
+    const find = (re) => cols.findIndex(c => re.test(String(c || '').trim()));
+    const prefer = (exact, fuzzy) => {
+      const a = find(exact);
+      return a >= 0 ? a : find(fuzzy);
     };
-
-    const findColIdx = (regex) => {
-      return cols.findIndex(c => regex.test(String(c || '').trim()));
-    };
-
-    // 1. PESEL / NIP / REGON
-    const peselIdx = findColIdx(/^pesel$/i) >= 0 ? findColIdx(/^pesel$/i) : findColIdx(/pesel/i);
-    const pesel = getColVal(peselIdx);
-
-    const nipIdx = findColIdx(/^nip$/i) >= 0 ? findColIdx(/^nip$/i) : findColIdx(/nip/i);
-    const nip = getColVal(nipIdx);
-
-    const regonIdx = findColIdx(/^regon$/i) >= 0 ? findColIdx(/^regon$/i) : findColIdx(/regon/i);
-    const regon = getColVal(regonIdx);
-
-    // 2. IMIĘ, NAZWISKO, PODMIOT, DŁUŻNIK, ZOBOWIĄZANY
-    let name = '';
-    
     const nameColPatterns = [
       /nazwisko.*i.*imi[eę]/i,
       /imi[eę].*i.*nazwisko/i,
@@ -851,34 +855,64 @@ const ZobowiazaniModule = (() => {
       /nazwa.*d[lł]u[zż]nika/i,
       /nazwa/i
     ];
-
-    for (const pat of nameColPatterns) {
-      const idx = findColIdx(pat);
-      if (idx >= 0) {
-        const val = getColVal(idx);
-        if (val) {
-          name = val;
-          break;
-        }
+    const skipName = new Set();
+    cols.forEach((c, i) => {
+      const cName = String(c || '').trim();
+      if (REG_SYSTEMS.includes(cName) || ['Stan', 'Komplet', 'LP', 'L.p.', 'Lp', 'ID', 'Notatka', DEFER_COL, SUSPEND_COL].includes(cName)) {
+        skipName.add(i);
+      } else if (/pesel|nip|regon|data|kwota|sygn|stan|komplet|notatk/i.test(cName)) {
+        skipName.add(i);
       }
+    });
+    const map = {
+      pesel: prefer(/^pesel$/i, /pesel/i),
+      nip: prefer(/^nip$/i, /nip/i),
+      regon: prefer(/^regon$/i, /regon/i),
+      nameIdxs: nameColPatterns.map(find),
+      nazwisko: prefer(/^nazwisko$/i, /nazwisko/i),
+      imie: prefer(/^imi[eę]$/i, /imi[eę]/i),
+      ulica: prefer(/^(ulica|adres|ul\.|zamieszkanie|adres.*zamieszkania|siedziba)$/i, /ulica|adres|zamieszk/i),
+      miasto: prefer(/^(miasto|miejscowo[sś][cć])$/i, /miejscowo[sś][cć]|miasto/i),
+      kod: prefer(/^(kod|kod.*pocztowy|poczta)$/i, /kod/i),
+      kwota: find(/kwota|nale[zż]no[sś][cć]|zad[lł]u[zż]enie|suma/i),
+      sygn: find(/sygnatura|sygn|sprawa|nr.*sprawy/i),
+      notatka: prefer(/^notatka$/i, /notatk/i),
+      stan: cols.indexOf('Stan'),
+      skipName,
+      colCount: cols.length,
+    };
+    _personColCache = { sheet: dbSheet, len: cols.length, map };
+    return map;
+  }
+
+  function extractPersonInfo(row) {
+    const cols = dbSheet.columns || [];
+    const cmap = getPersonColMap();
+    const getColVal = (idx) => {
+      return (idx >= 0 && idx < row.length) ? String(row[idx] || '').trim() : '';
+    };
+
+    const pesel = getColVal(cmap.pesel);
+    const nip = getColVal(cmap.nip);
+    const regon = getColVal(cmap.regon);
+
+    let name = '';
+    for (let i = 0; i < cmap.nameIdxs.length; i++) {
+      const idx = cmap.nameIdxs[i];
+      if (idx < 0) continue;
+      const val = getColVal(idx);
+      if (val) { name = val; break; }
     }
 
     if (!name) {
-      const nazwiskoIdx = findColIdx(/^nazwisko$/i) >= 0 ? findColIdx(/^nazwisko$/i) : findColIdx(/nazwisko/i);
-      const imieIdx = findColIdx(/^imi[eę]$/i) >= 0 ? findColIdx(/^imi[eę]$/i) : findColIdx(/imi[eę]/i);
-      const nVal = getColVal(nazwiskoIdx);
-      const iVal = getColVal(imieIdx);
-      if (nVal || iVal) {
-        name = `${nVal} ${iVal}`.trim();
-      }
+      const nVal = getColVal(cmap.nazwisko);
+      const iVal = getColVal(cmap.imie);
+      if (nVal || iVal) name = `${nVal} ${iVal}`.trim();
     }
 
     if (!name) {
       for (let i = 0; i < cols.length; i++) {
-        const cName = String(cols[i] || '').trim();
-        if (REG_SYSTEMS.includes(cName) || ['Stan', 'Komplet', 'LP', 'L.p.', 'Lp', 'ID', 'Notatka', DEFER_COL, SUSPEND_COL].includes(cName)) continue;
-        if (/pesel|nip|regon|data|kwota|sygn|stan|komplet|notatk/i.test(cName)) continue;
-        
+        if (cmap.skipName.has(i)) continue;
         const val = getColVal(i);
         if (val && /[a-zA-ZąćęłńóśźżĄĆĘŁŃÓŚŹŻ]{2,}/.test(val) && !/^\d{2}[.-]\d{2}[.-]\d{4}$/.test(val)) {
           name = val;
@@ -891,23 +925,10 @@ const ZobowiazaniModule = (() => {
       name = pesel ? `PESEL: ${pesel}` : (nip ? `NIP: ${nip}` : 'Brak danych');
     }
 
-    // 3. ADRES
-    let ulica = '', miasto = '', kod = '', adresStr = '';
-    const ulicaIdx = findColIdx(/^(ulica|adres|ul\.|zamieszkanie|adres.*zamieszkania|siedziba)$/i) >= 0 
-      ? findColIdx(/^(ulica|adres|ul\.|zamieszkanie|adres.*zamieszkania|siedziba)$/i)
-      : findColIdx(/ulica|adres|zamieszk/i);
-    ulica = getColVal(ulicaIdx);
-
-    const miastoIdx = findColIdx(/^(miasto|miejscowo[sś][cć])$/i) >= 0
-      ? findColIdx(/^(miasto|miejscowo[sś][cć])$/i)
-      : findColIdx(/miejscowo[sś][cć]|miasto/i);
-    miasto = getColVal(miastoIdx);
-
-    const kodIdx = findColIdx(/^(kod|kod.*pocztowy|poczta)$/i) >= 0
-      ? findColIdx(/^(kod|kod.*pocztowy|poczta)$/i)
-      : findColIdx(/kod/i);
-    kod = getColVal(kodIdx);
-
+    let ulica = getColVal(cmap.ulica);
+    let miasto = getColVal(cmap.miasto);
+    let kod = getColVal(cmap.kod);
+    let adresStr = '';
     if (ulica) adresStr = ulica;
     if (kod || miasto) {
       const cityPart = `${kod} ${miasto}`.trim();
@@ -924,22 +945,13 @@ const ZobowiazaniModule = (() => {
       }
     }
 
-    // 4. KWOTA I SYGNATURA
-    const kwotaIdx = findColIdx(/kwota|nale[zż]no[sś][cć]|zad[lł]u[zż]enie|suma/i);
-    const kwota = getColVal(kwotaIdx);
-
-    const sygnIdx = findColIdx(/sygnatura|sygn|sprawa|nr.*sprawy/i);
-    const sygnatura = getColVal(sygnIdx);
-
-    // 5. NOTATKA
-    const notatkaIdx = findColIdx(/^notatka$/i) >= 0 ? findColIdx(/^notatka$/i) : findColIdx(/notatk/i);
-    const notatka = getColVal(notatkaIdx);
-
-    // 6. STAN
-    const stanIdx = cols.indexOf('Stan');
-    const stan = getColVal(stanIdx);
-
-    return { name, pesel, nip, regon, adresStr, ulica, miasto, kod, kwota, sygnatura, notatka, stan };
+    return {
+      name, pesel, nip, regon, adresStr, ulica, miasto, kod,
+      kwota: getColVal(cmap.kwota),
+      sygnatura: getColVal(cmap.sygn),
+      notatka: getColVal(cmap.notatka),
+      stan: getColVal(cmap.stan),
+    };
   }
 
   /* ─── SYNCHRONIZACJA CEPIK (WRO) ────────────────────────── */
@@ -952,39 +964,113 @@ const ZobowiazaniModule = (() => {
     return (cepik && cepik.hasVehicles) ? cepik : null;
   }
 
-  function renderMajatekHtml(info) {
+  function fmtDatePl(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return String(iso).slice(0, 10);
+    return String(d.getDate()).padStart(2, '0') + '.' + String(d.getMonth() + 1).padStart(2, '0') + '.' + d.getFullYear();
+  }
+
+  function wroRowPreview(headers, row) {
+    const idx = (headers || []).findIndex(h => /bank|nazwa|adres|nieruch|rachun|iban|marka|vin|kwota|opis|kw\b/i.test(String(h || '')));
+    const useIdx = idx >= 0 ? idx : 0;
+    return String(row[useIdx] || row[0] || '').trim() || (headers[0] ? String(headers[0]) : 'wpis');
+  }
+
+  function renderMajatekHtml(info, row) {
     const hasWro = typeof WroModule !== 'undefined';
-    const summary = (hasWro && WroModule.getAssetSummaryForPerson)
-      ? WroModule.getAssetSummaryForPerson(info.pesel, info.nip, info.name)
-      : null;
-    if (!hasWro || !WroModule.getBazaDanych || !Object.keys(WroModule.getBazaDanych() || {}).length) {
+    const pk = String(info.pesel || info.nip || '').replace(/\D/g, '');
+    const suspended = row ? isSuspendedRow(row) : false;
+
+    if (!hasWro || !pk || !WroModule.getMajatekSnapshot) {
       return `<div class="zob-sheet" style="border-style:dashed">
         <div class="zob-sheet-title"><span>Majątek z WRO</span></div>
-        <p class="zob-mod-sub" style="margin:0">Najpierw wczytaj bazę w Analityce WRO — tu pojawi się skrót (OGNIVO, AUM, KW, STIR…).</p>
+        <p class="zob-mod-sub" style="margin:0">Brak PESEL/NIP lub modułu WRO — nie można dopasować danych majątkowych.</p>
+      </div>`;
+    }
+
+    const snap = WroModule.getMajatekSnapshot(pk);
+    if (!snap || !snap.sections || !Object.keys(snap.sections).length) {
+      return `<div class="zob-sheet" style="border-style:dashed">
+        <div class="zob-sheet-title"><span>Majątek z WRO</span></div>
+        <p class="zob-mod-sub" style="margin:0">Brak zsynchronizowanych danych dla tej osoby. Wgraj plik i kliknij <strong>„Synchronizuj z Szafką”</strong> w Analityce WRO.</p>
         <button class="zob-action-btn" style="align-self:flex-start;margin-top:8px" onclick="Router.navigate('wro')">Otwórz Analitykę WRO</button>
       </div>`;
     }
-    if (!summary || !summary.found) {
-      return `<div class="zob-sheet" style="border-style:dashed">
-        <div class="zob-sheet-title"><span>Majątek z WRO</span></div>
-        <p class="zob-mod-sub" style="margin:0">Brak tej osoby w wczytanej bazie WRO.</p>
-        <button class="zob-action-btn" style="align-self:flex-start;margin-top:8px" onclick="ZobowiazaniModule.openWro('${escapeHtml(info.pesel || '')}','${escapeHtml(info.nip || '')}','')">Szukaj w WRO</button>
-      </div>`;
-    }
-    const tiles = (summary.items || []).map(it => `
-      <button type="button" class="zob-asset-tile" onclick="ZobowiazaniModule.openWro('${escapeHtml(info.pesel || '')}','${escapeHtml(info.nip || '')}','${escapeHtml(it.section || '')}')">
-        <div class="zob-asset-ico">${it.icon || '📄'}</div>
-        <div class="zob-asset-body">
-          <div class="zob-asset-title">${escapeHtml(it.label)} <span class="zob-asset-n">${it.count}</span></div>
-          <div class="zob-asset-line">${escapeHtml(it.line || 'Kliknij, aby otworzyć w Analityce WRO')}</div>
+
+    const catalog = WroModule.getSourceCatalog ? WroModule.getSourceCatalog() : [];
+    const order = catalog.length ? catalog.map(c => c.key) : Object.keys(snap.sections);
+    const sectionKeys = Object.keys(snap.sections).sort((a, b) => {
+      const ia = order.indexOf(a), ib = order.indexOf(b);
+      return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib);
+    });
+
+    const dochodBadge = snap.dochodMax > 0
+      ? `<span class="zob-asset-n" style="background:rgba(154,107,47,.15);color:#9a6b2f">💰 max dochód: ${snap.dochodMax.toLocaleString('pl-PL')} zł</span>`
+      : '';
+
+    const blocks = sectionKeys.map(secKey => {
+      const sec = snap.sections[secKey];
+      const iconMeta = catalog.find(c => c.key === secKey);
+      const icon = iconMeta ? iconMeta.icon : '📄';
+      const label = iconMeta ? iconMeta.label : secKey.replace('Wynik: ', '');
+      const isAction = secKey.startsWith('Wynik:');
+      const safe = secKey.replace(/[^a-zA-Z0-9]/g, '');
+      const headers = sec.headers || [];
+      const rows = sec.rows || [];
+
+      if (!isAction) {
+        const preview = rows.slice(0, 3).map(r => escapeHtml(wroRowPreview(headers, r))).join(' · ');
+        return `<div class="zob-sheet" style="border-style:dashed">
+          <div class="zob-sheet-title"><span>${icon} ${escapeHtml(label)} <span class="zob-asset-n">${rows.length}</span></span><span>wrzucono ${fmtDatePl(sec.updatedAt)}</span></div>
+          <p class="zob-mod-sub" style="margin:0">${preview || '—'}</p>
+        </div>`;
+      }
+
+      const todoRows = [], knownRows = [];
+      rows.forEach(r => {
+        const fp = r.slice(0, 5).map(v => String(v || '')).join('||');
+        const ann = WroModule.getAnnotation ? WroModule.getAnnotation(pk, safe, fp) : null;
+        (ann && (ann.status === 'done' || ann.status === 'excluded') ? knownRows : todoRows).push({ r, fp, ann });
+      });
+      const showTodo = !suspended;
+
+      const rowCard = (item, known) => `
+        <div class="wro-card ${item.ann?.status === 'excluded' ? 'wro-card-excl' : item.ann?.status === 'done' ? 'wro-card-done' : ''}" style="margin-bottom:6px">
+          <div class="wro-card-hdr">
+            <span>${escapeHtml(wroRowPreview(headers, item.r))}</span>
+            ${known
+              ? `<button class="wro-annot-btn" style="background:#e2e8f0;color:#475569" onclick="ZobowiazaniModule.markWroItem('${pk}','${safe}','${encodeURIComponent(item.fp)}',null)">↩️ Wróć do „do zajęcia”</button>`
+              : `<span style="display:flex;gap:4px">
+                  <button class="wro-annot-btn" style="background:#dcfce7;color:#166534" onclick="ZobowiazaniModule.markWroItem('${pk}','${safe}','${encodeURIComponent(item.fp)}','done')">✅ Zrobione</button>
+                  <button class="wro-annot-btn" style="background:#fee2e2;color:#991b1b" onclick="ZobowiazaniModule.markWroItem('${pk}','${safe}','${encodeURIComponent(item.fp)}','excluded')">⛔ Wyklucz</button>
+                </span>`}
+          </div>
+        </div>`;
+
+      const bid = 'zwk' + Math.random().toString(36).slice(2, 8);
+      return `<div class="zob-sheet">
+        <div class="zob-sheet-title">
+          <span>${icon} ${escapeHtml(label)} <span class="zob-asset-n">${rows.length}</span>${suspended ? ' <span class="zob-asset-n" style="background:rgba(122,85,36,.18);color:#7a5524">⏸ zawieszona — bez alertów</span>' : ''}</span>
+          <span>wrzucono ${fmtDatePl(sec.updatedAt)}</span>
         </div>
-        <span class="zob-asset-go">WRO →</span>
-      </button>
-    `).join('');
-    return `<div class="zob-sheet">
-      <div class="zob-sheet-title"><span>Majątek z WRO</span><span>Kliknij kafelek → Analityka WRO</span></div>
-      <div class="zob-asset-list">${tiles || '<p class="zob-mod-sub">Są dane osoby, ale bez sekcji majątku.</p>'}</div>
-    </div>`;
+        ${showTodo ? todoRows.map(it => rowCard(it, false)).join('') : ''}
+        ${!showTodo && todoRows.length ? `<p class="zob-mod-sub" style="margin:0">${todoRows.length} wpis(ów) bez decyzji — sprawa zawieszona, nie wyświetlane jako nowość.</p>` : ''}
+        ${todoRows.length === 0 && knownRows.length > 0 ? '<p class="zob-mod-sub" style="margin:0">✅ Wszystkie wpisy oznaczone</p>' : ''}
+        ${knownRows.length > 0 ? `
+          <div class="wro-known-toggle" onclick="(function(el){const g=el.nextElementSibling;g.classList.toggle('wro-known-hidden');el.classList.toggle('expanded');el.querySelector('.wro-known-arrow').textContent=g.classList.contains('wro-known-hidden')?'▶':'▼'})(this)">
+            <span>👁 Pokaż znane (${knownRows.length})</span><span class="wro-known-arrow">▶</span>
+          </div>
+          <div class="wro-known-hidden" id="${bid}">${knownRows.map(it => rowCard(it, true)).join('')}</div>
+        ` : ''}
+      </div>`;
+    }).join('');
+
+    return `<div class="zob-sheet" style="margin-bottom:0">
+        <div class="zob-sheet-title"><span>Majątek z WRO</span><span>ost. synchronizacja: ${fmtDatePl(snap.lastSyncAt)}</span></div>
+        ${dochodBadge ? `<div>${dochodBadge}</div>` : ''}
+      </div>
+      ${blocks}`;
   }
 
   function openWroForPerson(pesel, nip, section) {
@@ -1118,18 +1204,41 @@ const ZobowiazaniModule = (() => {
   }
 
   /* ─── FILTRY I STATYSTYKI ──────────────────────────────── */
+  function rowIsFresh(row, info) {
+    if (!freshKeys.size) return false;
+    const inf = info || extractPersonInfo(row);
+    const pesel = String(inf.pesel || '').replace(/\D/g, '');
+    const nip = String(inf.nip || '').replace(/\D/g, '');
+    const key = personKeyFromInfo(inf);
+    return (pesel && freshKeys.has(pesel)) || (nip && freshKeys.has(nip)) || (key && freshKeys.has(key));
+  }
+
   function getFilteredRows() {
     if (!dbSheet || !dbSheet.rows) return [];
-    
-    let rowsWithIndex = dbSheet.rows.map((row, idx) => ({ row, idx }));
+    const cacheKey = [
+      dbSheet.rows.length,
+      sectionFilter,
+      activeFilter,
+      filterText,
+      sortCol,
+      sortDir,
+      Object.keys(archiveMap).length,
+      deskPins.length,
+      freshKeys.size,
+    ].join('|');
+    if (_filterCache.key === cacheKey && _filterCache.rows) return _filterCache.rows;
+
+    let rowsWithIndex = dbSheet.rows.map((row, idx) => {
+      const info = extractPersonInfo(row);
+      return { row, idx, info, key: personKeyFromInfo(info) };
+    });
 
     // Sekcje: Aktywne / Biurko / Archiwum
     rowsWithIndex = rowsWithIndex.filter(item => {
-      const key = personKeyFromRow(item.row);
-      const archived = isArchived(key);
+      const archived = isArchived(item.key);
       const suspended = isSuspendedRow(item.row);
       if (sectionFilter === 'archive') return archived;
-      if (sectionFilter === 'desk') return isPinned(key) && !archived && !suspended;
+      if (sectionFilter === 'desk') return isPinned(item.key) && !archived && !suspended;
       if (sectionFilter === 'suspended') return suspended && !archived;
       return !archived && !suspended;
     });
@@ -1141,7 +1250,9 @@ const ZobowiazaniModule = (() => {
       });
     }
 
-    if (activeFilter === 'todo') {
+    if (activeFilter === 'fresh') {
+      rowsWithIndex = rowsWithIndex.filter(item => rowIsFresh(item.row, item.info));
+    } else if (activeFilter === 'todo') {
       rowsWithIndex = rowsWithIndex.filter(item => getPersonSysCount(item.row) === 0);
     } else if (activeFilter === 'progress') {
       rowsWithIndex = rowsWithIndex.filter(item => {
@@ -1158,9 +1269,15 @@ const ZobowiazaniModule = (() => {
         return d && d.due;
       });
     } else if (activeFilter === 'has_cepik') {
+      rowsWithIndex = rowsWithIndex.filter(item => !!getCepikForPerson(item.info));
+    } else if (activeFilter === 'wro_new') {
       rowsWithIndex = rowsWithIndex.filter(item => {
-        const info = extractPersonInfo(item.row);
-        return !!getCepikForPerson(info);
+        return typeof WroModule !== 'undefined' && WroModule.hasPendingItemsForKey && WroModule.hasPendingItemsForKey(item.key);
+      });
+    } else if (activeFilter.startsWith('src:')) {
+      const secKey = activeFilter.slice(4);
+      rowsWithIndex = rowsWithIndex.filter(item => {
+        return typeof WroModule !== 'undefined' && WroModule.personHasSection && WroModule.personHasSection(item.key, secKey);
       });
     } else if (activeFilter.startsWith('no_')) {
       const sysName = activeFilter.replace('no_', '').toUpperCase();
@@ -1174,29 +1291,17 @@ const ZobowiazaniModule = (() => {
     }
 
     if (sortCol === 'name') {
-      rowsWithIndex.sort((a, b) => {
-        const nA = extractPersonInfo(a.row).name.toLowerCase();
-        const nB = extractPersonInfo(b.row).name.toLowerCase();
-        return nA.localeCompare(nB, 'pl') * sortDir;
-      });
+      rowsWithIndex.sort((a, b) => a.info.name.toLowerCase().localeCompare(b.info.name.toLowerCase(), 'pl') * sortDir);
     } else if (sortCol === 'pesel') {
       rowsWithIndex.sort((a, b) => {
-        const nA = extractPersonInfo(a.row).pesel || extractPersonInfo(a.row).nip || '';
-        const nB = extractPersonInfo(b.row).pesel || extractPersonInfo(b.row).nip || '';
+        const nA = a.info.pesel || a.info.nip || '';
+        const nB = b.info.pesel || b.info.nip || '';
         return String(nA).localeCompare(String(nB), 'pl') * sortDir;
       });
     } else if (sortCol === 'stan') {
-      rowsWithIndex.sort((a, b) => {
-        const cA = getPersonSysCount(a.row);
-        const cB = getPersonSysCount(b.row);
-        return (cA - cB) * sortDir;
-      });
+      rowsWithIndex.sort((a, b) => (getPersonSysCount(a.row) - getPersonSysCount(b.row)) * sortDir);
     } else if (sortCol === 'adres') {
-      rowsWithIndex.sort((a, b) => {
-        const nA = extractPersonInfo(a.row).adresStr.toLowerCase();
-        const nB = extractPersonInfo(b.row).adresStr.toLowerCase();
-        return nA.localeCompare(nB, 'pl') * sortDir;
-      });
+      rowsWithIndex.sort((a, b) => a.info.adresStr.toLowerCase().localeCompare(b.info.adresStr.toLowerCase(), 'pl') * sortDir);
     } else if (sortCol === 'aktywnosc') {
       rowsWithIndex.sort((a, b) => {
         const dA = parseDatePl(getLastActivity(a.row)) || new Date(0);
@@ -1213,8 +1318,8 @@ const ZobowiazaniModule = (() => {
       });
     } else if (sortCol === 'cepik') {
       rowsWithIndex.sort((a, b) => {
-        const cA = getCepikForPerson(extractPersonInfo(a.row)) ? 1 : 0;
-        const cB = getCepikForPerson(extractPersonInfo(b.row)) ? 1 : 0;
+        const cA = getCepikForPerson(a.info) ? 1 : 0;
+        const cB = getCepikForPerson(b.info) ? 1 : 0;
         return (cA - cB) * sortDir;
       });
     } else if (typeof sortCol === 'number' && sortCol >= 0) {
@@ -1230,6 +1335,7 @@ const ZobowiazaniModule = (() => {
       rowsWithIndex.sort((a, b) => (a.idx - b.idx) * (sortDir || 1));
     }
 
+    _filterCache = { key: cacheKey, rows: rowsWithIndex };
     return rowsWithIndex;
   }
 
@@ -1250,7 +1356,7 @@ const ZobowiazaniModule = (() => {
 
   function computeFilterCounts() {
     if (!dbSheet || !dbSheet.rows) return { all: 0, todo: 0, progress: 0, complete: 0, cepik: 0, deferred: 0, due: 0 };
-    let todo = 0, progress = 0, complete = 0, cepikCount = 0, deferred = 0, due = 0;
+    let todo = 0, progress = 0, complete = 0, cepikCount = 0, deferred = 0, due = 0, wroNew = 0;
     let scoped = 0;
     dbSheet.rows.forEach(r => {
       const key = personKeyFromRow(r);
@@ -1274,8 +1380,23 @@ const ZobowiazaniModule = (() => {
         deferred++;
         if (def.due) due++;
       }
+
+      if (!archived && !isSuspendedRow(r) && typeof WroModule !== 'undefined' && WroModule.hasPendingItemsForKey && WroModule.hasPendingItemsForKey(key)) {
+        wroNew++;
+      }
     });
-    return { all: scoped, todo, progress, complete, cepik: cepikCount, deferred, due };
+    return { all: scoped, todo, progress, complete, cepik: cepikCount, deferred, due, wroNew };
+  }
+
+  function renderSourceChipsHtml() {
+    if (typeof WroModule === 'undefined' || !WroModule.getSourceCatalog) return '';
+    const catalog = WroModule.getSourceCatalog();
+    if (!catalog.length) return '';
+    const chips = catalog.map(c => {
+      const filterKey = 'src:' + c.key;
+      return `<button class="zob-pill ${activeFilter === filterKey ? 'active' : ''}" onclick="ZobowiazaniModule.setFilter('${filterKey}')" title="Pokaż teczki z danymi ${escapeHtml(c.label)}">${c.icon} ${escapeHtml(c.label)}</button>`;
+    }).join('');
+    return `<div class="zob-pills" id="zob-src-chips" style="margin-top:2px"><span class="zob-section-hint" style="text-transform:none;font-size:.7rem;opacity:.7;margin-right:2px">Źródło WRO:</span>${chips}</div>`;
   }
 
   /* ─── RENDEROWANIE GŁÓWNEGO WIDOKU ─────────────────────── */
@@ -1379,6 +1500,16 @@ const ZobowiazaniModule = (() => {
               <button class="zob-pill pill-warn ${activeFilter === 'due' ? 'active' : ''}" onclick="ZobowiazaniModule.setFilter('due')">
                 Do powrotu <span class="zob-pill-count">${counts.due}</span>
               </button>
+              ${counts.wroNew > 0 ? `
+                <button class="zob-pill pill-danger ${activeFilter === 'wro_new' ? 'active' : ''}" onclick="ZobowiazaniModule.setFilter('wro_new')" title="Osoby z niezałatwionymi pozycjami z ostatniej synchronizacji WRO (bez zawieszonych)">
+                  🔥 Nowość WRO <span class="zob-pill-count">${counts.wroNew}</span>
+                </button>
+              ` : ''}
+              ${freshKeys.size ? `
+                <button class="zob-pill pill-ok ${activeFilter === 'fresh' ? 'active' : ''}" onclick="ZobowiazaniModule.setFilter('fresh')" id="zob-fresh-pill">
+                  Nowe <span class="zob-pill-count">${freshKeys.size}</span>
+                </button>
+              ` : ''}
               ${counts.cepik > 0 ? `
                 <button class="zob-pill ${activeFilter === 'has_cepik' ? 'active' : ''}" onclick="ZobowiazaniModule.setFilter('has_cepik')">
                   W CEPIK <span class="zob-pill-count">${counts.cepik}</span>
@@ -1391,6 +1522,7 @@ const ZobowiazaniModule = (() => {
               <button class="zob-pill ${activeFilter === 'no_jpk' ? 'active' : ''}" onclick="ZobowiazaniModule.setFilter('no_jpk')">Brak JPK</button>
               <button class="zob-pill ${activeFilter === 'no_infz' ? 'active' : ''}" onclick="ZobowiazaniModule.setFilter('no_infz')">Brak INFZ</button>
             </div>
+            ${renderSourceChipsHtml()}
           </div>
 
           <div class="zob-split-container mode-${viewMode}" id="zob-split">
@@ -1412,7 +1544,8 @@ const ZobowiazaniModule = (() => {
       if (searchInput) {
         searchInput.addEventListener('input', (e) => {
           filterText = e.target.value;
-          renderViews();
+          invalidateListCache();
+          renderViews({ keepScroll: true, detail: false, tabs: false });
         });
       }
 
@@ -1497,14 +1630,17 @@ const ZobowiazaniModule = (() => {
     }
   }
 
-  function renderViews() {
+  function renderViews(opts) {
+    opts = opts || {};
     rematchOpenTabs();
     applyViewMode();
-    renderBrowserTabs();
-    renderTableOnly();
-    renderDetailOnly();
-    updatePillsBar();
-    updateSectionsBar();
+    if (opts.tabs !== false) renderBrowserTabs();
+    if (opts.list !== false) renderTableOnly({ keepScroll: !!opts.keepScroll });
+    if (opts.detail !== false) renderDetailOnly();
+    if (opts.pills !== false) {
+      updatePillsBar();
+      updateSectionsBar();
+    }
   }
 
   function updateSectionsBar() {
@@ -1532,6 +1668,21 @@ const ZobowiazaniModule = (() => {
     if (drawerCount) drawerCount.textContent = String(visibleRows.length);
     const bar = document.getElementById('zob-pills-bar');
     if (!bar) return;
+    let freshBtn = document.getElementById('zob-fresh-pill');
+    if (freshKeys.size) {
+      if (!freshBtn) {
+        freshBtn = document.createElement('button');
+        freshBtn.id = 'zob-fresh-pill';
+        freshBtn.className = 'zob-pill pill-ok';
+        freshBtn.setAttribute('onclick', "ZobowiazaniModule.setFilter('fresh')");
+        const sep = bar.querySelector('.zob-pill-sep');
+        bar.insertBefore(freshBtn, sep || null);
+      }
+      freshBtn.innerHTML = `Nowe <span class="zob-pill-count">${freshKeys.size}</span>`;
+    } else if (freshBtn) {
+      freshBtn.remove();
+      if (activeFilter === 'fresh') activeFilter = 'all';
+    }
     bar.querySelectorAll('.zob-pill').forEach(btn => {
       const onclick = btn.getAttribute('onclick') || '';
       const m = onclick.match(/setFilter\('([^']+)'\)/);
@@ -1552,7 +1703,149 @@ const ZobowiazaniModule = (() => {
     return `<span class="sort-ind">${sortDir > 0 ? '▲' : '▼'}</span>`;
   }
 
-  function renderTableOnly() {
+  function virtRowHeight() {
+    return viewMode === 'list' ? 37 : 52;
+  }
+
+  function bindFolderListEvents(list) {
+    if (!list || list._zobBound) return;
+    list._zobBound = true;
+    list.addEventListener('click', (e) => {
+      if (e.target.closest('.zob-pin-btn, .zob-person-sort, thead th')) return;
+      const row = e.target.closest('[data-ri]');
+      if (!row || !list.contains(row)) return;
+      selectRow(+row.dataset.ri, true);
+    });
+    list.addEventListener('contextmenu', (e) => {
+      const row = e.target.closest('[data-ri]');
+      if (!row || !list.contains(row)) return;
+      e.preventDefault();
+      openRowMenu(e, +row.dataset.ri);
+    });
+    list.addEventListener('scroll', () => {
+      if (_virtRaf) return;
+      _virtRaf = requestAnimationFrame(() => {
+        _virtRaf = 0;
+        paintVirtualWindow();
+      });
+    }, { passive: true });
+  }
+
+  function dotsHtml(row, withTitle) {
+    let dots = '';
+    REG_SYSTEMS.forEach(sys => {
+      const sysIdx = dbSheet.columns.indexOf(sys);
+      const sysVal = sysIdx >= 0 ? String(row[sysIdx] || '').trim() : '';
+      const isDone = sysVal !== '' && sysVal.toLowerCase() !== 'pomiń';
+      const isSkip = sysVal.toLowerCase() === 'pomiń';
+      const title = withTitle ? ` title="${sys}: ${escapeHtml(sysVal || 'brak')}"` : ` title="${sys}"`;
+      dots += `<span class="zob-dot ${isDone ? 'on' : ''}${isSkip ? ' skip' : ''}"${title}></span>`;
+    });
+    return dots;
+  }
+
+  function compactRowHtml(item) {
+    const r = item.row;
+    const ri = item.idx;
+    const info = item.info || extractPersonInfo(r);
+    const key = item.key || personKeyFromInfo(info);
+    const isSelected = ri === selectedRowIndex && activeTabKey === key;
+    const sysCount = getPersonSysCount(r);
+    const st = statusMeta(sysCount, r);
+    const hasCar = !!getCepikForPerson(info);
+    const fresh = rowIsFresh(r, info);
+    return `
+      <button type="button" class="zob-person-row ${isSelected ? 'is-selected' : ''}${hasCar ? ' has-car' : ''}${fresh ? ' is-fresh' : ''}" data-ri="${ri}">
+        <div class="zob-person-main">
+          <div class="zob-reg-name" title="${escapeHtml(info.name)}">${hasCar ? '<span class="zob-car-mark" title="Pojazd w CEPIK">🚗</span>' : ''}${escapeHtml(info.name)}${fresh ? '<span class="zob-fresh-mark">nowa</span>' : ''}</div>
+          <div class="zob-systems-dots">${dotsHtml(r, false)}<span class="zob-systems-count">${sysCount}/5</span></div>
+        </div>
+        <span class="zob-status-chip ${st.cls}">${st.label}</span>
+      </button>`;
+  }
+
+  function tableRowHtml(item, displayIdx) {
+    const r = item.row;
+    const ri = item.idx;
+    const info = item.info || extractPersonInfo(r);
+    const key = item.key || personKeyFromInfo(info);
+    const isSelected = ri === selectedRowIndex && activeTabKey === key;
+    const sysCount = getPersonSysCount(r);
+    const st = statusMeta(sysCount, r);
+    const defer = getDeferInfo(r);
+    const pinned = isPinned(key);
+    const lastAct = getLastActivity(r);
+    const adresShort = (info.adresStr || '').length > 42
+      ? (info.adresStr.slice(0, 40) + '…')
+      : (info.adresStr || '—');
+    const idLine = [info.pesel, info.nip ? `NIP ${info.nip}` : ''].filter(Boolean).join(' · ');
+    const deferChip = defer
+      ? `<span class="zob-defer-chip ${defer.due ? 'due' : 'wait'}" title="Odłożone — wróć ${escapeHtml(defer.raw)}">${defer.due ? 'Do powrotu' : 'Na później'} ${escapeHtml(defer.raw)}</span>`
+      : '';
+    const hasCar = !!getCepikForPerson(info);
+    const fresh = rowIsFresh(r, info);
+    return `
+      <tr class="${isSelected ? 'is-selected' : ''}${pinned ? ' is-pinned' : ''}${hasCar ? ' has-car' : ''}${fresh ? ' is-fresh' : ''}" data-ri="${ri}">
+        <td style="width:36px;color:var(--zob-ink-soft);font-size:.72rem">${displayIdx + 1}</td>
+        <td>
+          <div class="zob-reg-name" title="${escapeHtml(info.name)}">${hasCar ? '<span class="zob-car-mark" title="Pojazd w CEPIK">🚗</span>' : ''}${escapeHtml(info.name)}${fresh ? '<span class="zob-fresh-mark">nowa</span>' : ''}</div>
+        </td>
+        <td class="zob-reg-ids">${escapeHtml(idLine || '—')}</td>
+        <td title="${escapeHtml(info.adresStr || '')}"><span class="zob-reg-addr">${escapeHtml(adresShort)}</span></td>
+        <td>
+          <div class="zob-reg-sys">${dotsHtml(r, true)}<span class="zob-reg-sys-count">${sysCount}/5</span></div>
+        </td>
+        <td style="text-align:center"><span class="zob-status-chip ${st.cls}">${st.label}</span></td>
+        <td>${deferChip || '<span class="zob-muted">—</span>'}</td>
+        <td style="text-align:center">${hasCar ? '<span class="zob-car-mark" title="Pojazd w CEPIK">🚗</span>' : '<span class="zob-muted">—</span>'}</td>
+        <td class="zob-reg-ids">${escapeHtml(lastAct || '—')}</td>
+        <td style="text-align:center" onclick="event.stopPropagation()">
+          <button type="button" class="zob-pin-btn ${pinned ? 'on' : ''}" title="${pinned ? 'Zdejmij z Biurka' : 'Przypnij do Biurka'}"
+            onclick="ZobowiazaniModule.togglePin(decodeURIComponent('${encodeURIComponent(key)}'))">${pinned ? '📌' : '📍'}</button>
+        </td>
+      </tr>`;
+  }
+
+  function virtRange(list, count, rowH) {
+    const overscan = 10;
+    const viewH = list.clientHeight || 480;
+    const start = Math.max(0, Math.floor(list.scrollTop / rowH) - overscan);
+    const end = Math.min(count, Math.ceil((list.scrollTop + viewH) / rowH) + overscan);
+    return { start, end };
+  }
+
+  function paintVirtualWindow() {
+    const list = document.getElementById('zob-folder-list');
+    if (!list || !dbSheet) return;
+    const visibleRows = getFilteredRows();
+    const fullCols = viewMode === 'list';
+    const rowH = virtRowHeight();
+    const { start, end } = virtRange(list, visibleRows.length, rowH);
+
+    if (!fullCols) {
+      const spacer = document.getElementById('zob-virt-spacer');
+      const win = document.getElementById('zob-virt-window');
+      if (!spacer || !win) return;
+      spacer.style.height = (visibleRows.length * rowH) + 'px';
+      win.style.transform = 'translateY(' + (start * rowH) + 'px)';
+      let html = '';
+      for (let i = start; i < end; i++) html += compactRowHtml(visibleRows[i]);
+      win.innerHTML = html;
+      return;
+    }
+
+    const tbody = list.querySelector('.zob-reg-table tbody');
+    if (!tbody) return;
+    const topH = start * rowH;
+    const botH = Math.max(0, (visibleRows.length - end) * rowH);
+    let html = `<tr class="zob-virt-pad"><td colspan="10" style="height:${topH}px;padding:0;border:0"></td></tr>`;
+    for (let i = start; i < end; i++) html += tableRowHtml(visibleRows[i], i);
+    html += `<tr class="zob-virt-pad"><td colspan="10" style="height:${botH}px;padding:0;border:0"></td></tr>`;
+    tbody.innerHTML = html;
+  }
+
+  function renderTableOnly(opts) {
+    opts = opts || {};
     const list = document.getElementById('zob-folder-list');
     if (!list || !dbSheet) return;
 
@@ -1560,131 +1853,83 @@ const ZobowiazaniModule = (() => {
     const fullCols = viewMode === 'list';
     const drawer = document.querySelector('.zob-drawer');
     if (drawer) drawer.classList.toggle('compact', !fullCols);
+    bindFolderListEvents(list);
 
-    if (!visibleRows.length) {
-      list.innerHTML = `<div class="zob-folder-empty">Brak osób spełniających wybrane kryteria</div>`;
-      return;
+    const keepScroll = !!opts.keepScroll;
+    const prevScroll = list.scrollTop;
+    const wantMode = (!visibleRows.length) ? 'empty' : (fullCols ? 'table' : 'compact');
+
+    if (list.dataset.virtMode !== wantMode) {
+      list.dataset.virtMode = wantMode;
+      if (!visibleRows.length) {
+        list.innerHTML = `<div class="zob-folder-empty">Brak osób spełniających wybrane kryteria</div>`;
+        return;
+      }
+      if (!fullCols) {
+        list.innerHTML = `
+          <div class="zob-person-list-head">
+            <button type="button" class="zob-person-sort ${sortCol === 'name' ? 'is-sorted' : ''}" onclick="ZobowiazaniModule.sortBy('name')">Nazwisko${sortMark('name')}</button>
+            <button type="button" class="zob-person-sort ${sortCol === 'cepik' ? 'is-sorted' : ''}" onclick="ZobowiazaniModule.sortBy('cepik')">🚗${sortMark('cepik')}</button>
+            <button type="button" class="zob-person-sort ${sortCol === 'stan' ? 'is-sorted' : ''}" onclick="ZobowiazaniModule.sortBy('stan')">Status${sortMark('stan')}</button>
+          </div>
+          <div class="zob-virt" id="zob-virt">
+            <div class="zob-virt-spacer" id="zob-virt-spacer"></div>
+            <div class="zob-virt-window" id="zob-virt-window"></div>
+          </div>`;
+      } else {
+        list.innerHTML = `
+          <table class="zob-reg-table zob-reg-full">
+            <thead>
+              <tr>
+                <th style="width:36px" onclick="ZobowiazaniModule.sortBy('idx')" class="${sortCol === 'idx' ? 'is-sorted' : ''}">#${sortMark('idx')}</th>
+                <th onclick="ZobowiazaniModule.sortBy('name')" class="${sortCol === 'name' ? 'is-sorted' : ''}">Nazwisko i imię${sortMark('name')}</th>
+                <th onclick="ZobowiazaniModule.sortBy('pesel')" class="${sortCol === 'pesel' ? 'is-sorted' : ''}">PESEL / NIP${sortMark('pesel')}</th>
+                <th onclick="ZobowiazaniModule.sortBy('adres')" class="${sortCol === 'adres' ? 'is-sorted' : ''}">Adres${sortMark('adres')}</th>
+                <th onclick="ZobowiazaniModule.sortBy('stan')" class="${sortCol === 'stan' ? 'is-sorted' : ''}" style="width:120px">Systemy${sortMark('stan')}</th>
+                <th onclick="ZobowiazaniModule.sortBy('stan')" class="${sortCol === 'stan' ? 'is-sorted' : ''}" style="width:100px;text-align:center">Status${sortMark('stan')}</th>
+                <th onclick="ZobowiazaniModule.sortBy('wroc')" class="${sortCol === 'wroc' ? 'is-sorted' : ''}">Wróć${sortMark('wroc')}</th>
+                <th onclick="ZobowiazaniModule.sortBy('cepik')" class="${sortCol === 'cepik' ? 'is-sorted' : ''}" style="width:52px;text-align:center" title="Pojazd CEPIK">🚗${sortMark('cepik')}</th>
+                <th onclick="ZobowiazaniModule.sortBy('aktywnosc')" class="${sortCol === 'aktywnosc' ? 'is-sorted' : ''}">Ostatnia czynność${sortMark('aktywnosc')}</th>
+                <th style="width:44px;text-align:center" title="Biurko">📌</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>`;
+      }
+    } else if (!fullCols) {
+      list.querySelectorAll('.zob-person-sort').forEach(btn => {
+        const onclick = btn.getAttribute('onclick') || '';
+        const m = onclick.match(/sortBy\('([^']+)'\)/);
+        if (!m) return;
+        btn.classList.toggle('is-sorted', sortCol === m[1]);
+      });
+    } else if (fullCols) {
+      list.querySelectorAll('thead th').forEach(th => {
+        const onclick = th.getAttribute('onclick') || '';
+        const m = onclick.match(/sortBy\('([^']+)'\)/);
+        if (!m) return;
+        th.classList.toggle('is-sorted', sortCol === m[1]);
+      });
     }
 
-    if (!fullCols) {
-      let cards = '';
-      visibleRows.forEach((item) => {
-        const r = item.row;
-        const ri = item.idx;
-        const info = extractPersonInfo(r);
-        const key = personKeyFromInfo(info);
-        const isSelected = ri === selectedRowIndex && activeTabKey === key;
-        const sysCount = getPersonSysCount(r);
-        const st = statusMeta(sysCount, r);
-        let dots = '';
-        REG_SYSTEMS.forEach(sys => {
-          const sysIdx = dbSheet.columns.indexOf(sys);
-          const sysVal = sysIdx >= 0 ? String(r[sysIdx] || '').trim() : '';
-          const isDone = sysVal !== '' && sysVal.toLowerCase() !== 'pomiń';
-          const isSkip = sysVal.toLowerCase() === 'pomiń';
-          dots += `<span class="zob-dot ${isDone ? 'on' : ''}${isSkip ? ' skip' : ''}" title="${sys}"></span>`;
-        });
-        const hasCar = !!getCepikForPerson(info);
-        cards += `
-          <button type="button" class="zob-person-row ${isSelected ? 'is-selected' : ''}${hasCar ? ' has-car' : ''}" data-ri="${ri}"
-            onclick="ZobowiazaniModule.select(${ri})"
-            oncontextmenu="ZobowiazaniModule.openRowMenu(event, ${ri})">
-            <div class="zob-person-main">
-              <div class="zob-reg-name" title="${escapeHtml(info.name)}">${hasCar ? '<span class="zob-car-mark" title="Pojazd w CEPIK">🚗</span>' : ''}${escapeHtml(info.name)}</div>
-              <div class="zob-systems-dots">${dots}<span class="zob-systems-count">${sysCount}/5</span></div>
-            </div>
-            <span class="zob-status-chip ${st.cls}">${st.label}</span>
-          </button>
-        `;
-      });
-      list.innerHTML = `
-        <div class="zob-person-list-head">
-          <button type="button" class="zob-person-sort ${sortCol === 'name' ? 'is-sorted' : ''}" onclick="ZobowiazaniModule.sortBy('name')">Nazwisko${sortMark('name')}</button>
-          <button type="button" class="zob-person-sort ${sortCol === 'cepik' ? 'is-sorted' : ''}" onclick="ZobowiazaniModule.sortBy('cepik')">🚗${sortMark('cepik')}</button>
-          <button type="button" class="zob-person-sort ${sortCol === 'stan' ? 'is-sorted' : ''}" onclick="ZobowiazaniModule.sortBy('stan')">Status${sortMark('stan')}</button>
-        </div>
-        <div class="zob-person-list">${cards}</div>
-      `;
-      const selectedEl = list.querySelector('.zob-person-row.is-selected');
-      if (selectedEl) selectedEl.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-      return;
+    paintVirtualWindow();
+    if (keepScroll) list.scrollTop = prevScroll;
+
+    const vis = getFilteredRows();
+    const visIdx = vis.findIndex(item => item.idx === selectedRowIndex);
+    if (!keepScroll) {
+      const rowH = virtRowHeight();
+      if (visIdx >= 0) {
+        const target = visIdx * rowH;
+        if (target < list.scrollTop || target > list.scrollTop + list.clientHeight - rowH * 2) {
+          list.scrollTop = Math.max(0, target - rowH);
+          paintVirtualWindow();
+        }
+      } else {
+        list.scrollTop = 0;
+        paintVirtualWindow();
+      }
     }
-
-    let body = '';
-    visibleRows.forEach((item, displayIdx) => {
-      const r = item.row;
-      const ri = item.idx;
-      const info = extractPersonInfo(r);
-      const key = personKeyFromInfo(info);
-      const isSelected = false;
-      const sysCount = getPersonSysCount(r);
-      const st = statusMeta(sysCount, r);
-      const defer = getDeferInfo(r);
-      const pinned = isPinned(key);
-      const lastAct = getLastActivity(r);
-      const adresShort = (info.adresStr || '').length > 42
-        ? (info.adresStr.slice(0, 40) + '…')
-        : (info.adresStr || '—');
-
-      let dots = '';
-      REG_SYSTEMS.forEach(sys => {
-        const sysIdx = dbSheet.columns.indexOf(sys);
-        const sysVal = sysIdx >= 0 ? String(r[sysIdx] || '').trim() : '';
-        const isDone = sysVal !== '' && sysVal.toLowerCase() !== 'pomiń';
-        const isSkip = sysVal.toLowerCase() === 'pomiń';
-        dots += `<span class="zob-dot ${isDone ? 'on' : ''}${isSkip ? ' skip' : ''}" title="${sys}: ${escapeHtml(sysVal || 'brak')}"></span>`;
-      });
-
-      const idLine = [info.pesel, info.nip ? `NIP ${info.nip}` : ''].filter(Boolean).join(' · ');
-      const deferChip = defer
-        ? `<span class="zob-defer-chip ${defer.due ? 'due' : 'wait'}" title="Odłożone — wróć ${escapeHtml(defer.raw)}">${defer.due ? 'Do powrotu' : 'Na później'} ${escapeHtml(defer.raw)}</span>`
-        : '';
-
-      const hasCar = !!getCepikForPerson(info);
-      body += `
-        <tr class="${isSelected ? 'is-selected' : ''}${pinned ? ' is-pinned' : ''}${hasCar ? ' has-car' : ''}" data-ri="${ri}"
-          onclick="ZobowiazaniModule.select(${ri})"
-          oncontextmenu="ZobowiazaniModule.openRowMenu(event, ${ri})">
-          <td style="width:36px;color:var(--zob-ink-soft);font-size:.72rem">${displayIdx + 1}</td>
-          <td>
-            <div class="zob-reg-name" title="${escapeHtml(info.name)}">${hasCar ? '<span class="zob-car-mark" title="Pojazd w CEPIK">🚗</span>' : ''}${escapeHtml(info.name)}</div>
-          </td>
-          <td class="zob-reg-ids">${escapeHtml(idLine || '—')}</td>
-          <td title="${escapeHtml(info.adresStr || '')}"><span class="zob-reg-addr">${escapeHtml(adresShort)}</span></td>
-          <td>
-            <div class="zob-reg-sys">${dots}<span class="zob-reg-sys-count">${sysCount}/5</span></div>
-          </td>
-          <td style="text-align:center"><span class="zob-status-chip ${st.cls}">${st.label}</span></td>
-          <td>${deferChip || '<span class="zob-muted">—</span>'}</td>
-          <td style="text-align:center">${hasCar ? '<span class="zob-car-mark" title="Pojazd w CEPIK">🚗</span>' : '<span class="zob-muted">—</span>'}</td>
-          <td class="zob-reg-ids">${escapeHtml(lastAct || '—')}</td>
-          <td style="text-align:center" onclick="event.stopPropagation()">
-            <button type="button" class="zob-pin-btn ${pinned ? 'on' : ''}" title="${pinned ? 'Zdejmij z Biurka' : 'Przypnij do Biurka'}"
-              onclick="ZobowiazaniModule.togglePin(decodeURIComponent('${encodeURIComponent(key)}'))">${pinned ? '📌' : '📍'}</button>
-          </td>
-        </tr>
-      `;
-    });
-
-    list.innerHTML = `
-      <table class="zob-reg-table zob-reg-full">
-        <thead>
-          <tr>
-            <th style="width:36px" onclick="ZobowiazaniModule.sortBy('idx')" class="${sortCol === 'idx' ? 'is-sorted' : ''}">#${sortMark('idx')}</th>
-            <th onclick="ZobowiazaniModule.sortBy('name')" class="${sortCol === 'name' ? 'is-sorted' : ''}">Nazwisko i imię${sortMark('name')}</th>
-            <th onclick="ZobowiazaniModule.sortBy('pesel')" class="${sortCol === 'pesel' ? 'is-sorted' : ''}">PESEL / NIP${sortMark('pesel')}</th>
-            <th onclick="ZobowiazaniModule.sortBy('adres')" class="${sortCol === 'adres' ? 'is-sorted' : ''}">Adres${sortMark('adres')}</th>
-            <th onclick="ZobowiazaniModule.sortBy('stan')" class="${sortCol === 'stan' ? 'is-sorted' : ''}" style="width:120px">Systemy${sortMark('stan')}</th>
-            <th onclick="ZobowiazaniModule.sortBy('stan')" class="${sortCol === 'stan' ? 'is-sorted' : ''}" style="width:100px;text-align:center">Status${sortMark('stan')}</th>
-            <th onclick="ZobowiazaniModule.sortBy('wroc')" class="${sortCol === 'wroc' ? 'is-sorted' : ''}">Wróć${sortMark('wroc')}</th>
-            <th onclick="ZobowiazaniModule.sortBy('cepik')" class="${sortCol === 'cepik' ? 'is-sorted' : ''}" style="width:52px;text-align:center" title="Pojazd CEPIK">🚗${sortMark('cepik')}</th>
-            <th onclick="ZobowiazaniModule.sortBy('aktywnosc')" class="${sortCol === 'aktywnosc' ? 'is-sorted' : ''}">Ostatnia czynność${sortMark('aktywnosc')}</th>
-            <th style="width:44px;text-align:center" title="Biurko">📌</th>
-          </tr>
-        </thead>
-        <tbody>${body}</tbody>
-      </table>
-    `;
   }
 
   function setDetailTab(tabId) {
@@ -1856,7 +2101,7 @@ const ZobowiazaniModule = (() => {
         `;
       }
     } else if (detailTab === 'majatek') {
-      bodyHtml = renderMajatekHtml(info);
+      bodyHtml = renderMajatekHtml(info, r);
     } else {
       bodyHtml = `
         <div class="zob-sheet">
@@ -1943,10 +2188,26 @@ const ZobowiazaniModule = (() => {
     persistOpenTabs();
   }
 
-  function selectRow(ri) {
+  function selectRow(ri, fromList) {
     stampUfgIfCar(ri, true);
+    const wasList = viewMode === 'list';
     openOrActivateTab(ri);
-    renderViews();
+    if (wasList && viewMode !== 'list') {
+      const list = document.getElementById('zob-folder-list');
+      if (list) list.dataset.virtMode = '';
+      renderViews({ keepScroll: true });
+      return;
+    }
+    applyViewMode();
+    const list = document.getElementById('zob-folder-list');
+    if (list) {
+      list.querySelectorAll('.is-selected').forEach(el => el.classList.remove('is-selected'));
+      const el = list.querySelector('[data-ri="' + ri + '"]');
+      if (el) el.classList.add('is-selected');
+    }
+    renderBrowserTabs();
+    renderDetailOnly();
+    if (!fromList) renderTableOnly({ keepScroll: false });
   }
 
   function activateTab(key) {
@@ -2185,7 +2446,42 @@ const ZobowiazaniModule = (() => {
     renderViews();
   }
 
-  function applyArchiveIds(ids, meta) {
+  function isSuspended(key) {
+    const pk = String(key || '').replace(/\D/g, '') || String(key || '');
+    if (!pk || !dbSheet) return false;
+    const hit = lookupById(pk);
+    if (!hit || !dbSheet.rows[hit.rowIndex]) return false;
+    return isSuspendedRow(dbSheet.rows[hit.rowIndex]);
+  }
+
+  function archiveByKey(key, meta) {
+    const hit = lookupById(key);
+    if (!hit || !dbSheet || !dbSheet.rows[hit.rowIndex]) return false;
+    const info = extractPersonInfo(dbSheet.rows[hit.rowIndex]);
+    const pk = personKeyFromInfo(info);
+    if (isArchived(pk)) return true;
+    archiveMap[pk] = {
+      at: (meta && meta.at) || new Date().toISOString(),
+      name: info.name || '',
+      reason: (meta && meta.reason) || 'WRO: zniknęły dane',
+    };
+    closeTab(pk);
+    persistArchive();
+    invalidateListCache();
+    if (activated) renderViews();
+    if (typeof showToast === 'function') showToast('Teczka "' + (info.name || pk) + '" → Archiwum', 'info', 2500);
+    return true;
+  }
+
+  function markWroItem(personKey, sectionSafe, fingerprint, status) {
+    if (typeof WroModule === 'undefined' || !WroModule.setAnnotationData) return;
+    WroModule.setAnnotationData(personKey, sectionSafe, fingerprint, status ? { status } : null);
+    invalidateListCache();
+    renderDetailOnly();
+    updatePillsBar();
+  }
+
+  function applyArchiveIds(ids, meta, opts) {
     const list = Array.isArray(ids) ? ids : [];
     list.forEach(id => {
       const key = String(id || '').replace(/\D/g, '') || String(id || '');
@@ -2197,7 +2493,49 @@ const ZobowiazaniModule = (() => {
       };
     });
     persistArchive();
-    if (activated) renderViews();
+    invalidateListCache();
+    if (activated && !(opts && opts.silent)) renderViews();
+  }
+
+  async function afterExcelRefresh(payload) {
+    payload = payload || {};
+    const keys = Array.isArray(payload.addedKeys) ? payload.addedKeys : [];
+    freshKeys = new Set(keys.map(k => String(k || '').replace(/\D/g, '')).filter(Boolean));
+    invalidateListCache();
+    try {
+      await fetchDbFromArkusz(4000, { ensureRegistry: false });
+      dataSourceLabel = 'Arkusz';
+      persistLocal();
+    } catch (e) {
+      console.warn('[ZobowiazaniModule] afterExcelRefresh fetch:', e);
+    }
+    invalidateListCache();
+    sectionFilter = 'active';
+    if (freshKeys.size) activeFilter = 'fresh';
+    filtersOpen = true;
+    const tb = document.querySelector('#zobowiazani-app .zob-toolbar');
+    if (tb) {
+      tb.classList.add('filters-open');
+      tb.classList.remove('filters-collapsed');
+    }
+    activated = true;
+    const container = document.getElementById('zobowiazani-app');
+    const live = container && container.querySelector('.zob-header');
+    if (live) {
+      const list = document.getElementById('zob-folder-list');
+      if (list) list.dataset.virtMode = '';
+      renderViews();
+    }
+    if (typeof showToast === 'function') {
+      const n = freshKeys.size || payload.addedCount || 0;
+      const arch = payload.archiveCount || 0;
+      showToast(
+        (n ? ('+' + n + ' nowych teczek (filtr Nowe)') : 'Brak nowych teczek')
+        + (arch ? (' · ' + arch + ' → Archiwum') : ''),
+        n ? 'success' : 'info',
+        3500
+      );
+    }
   }
 
   function prevPerson() {
@@ -2401,13 +2739,15 @@ const ZobowiazaniModule = (() => {
     const container = document.getElementById('zobowiazani-app');
     const alreadyLive = activated && dbSheet && container && container.querySelector('.zob-header');
     activated = true;
-    if (!alreadyLive) await render();
+    if (!alreadyLive) {
+      await render();
+    }
     persistZawieszoneStore();
     const stamped = stampAllUfgFromCepik();
     if (stamped && typeof showToast === 'function') {
       showToast('UFG: wpisano datę przy ' + stamped + ' osobach z pojazdem CEPIK', 'success', 2800);
     }
-    if (alreadyLive || stamped) renderViews();
+    if (stamped) renderViews({ keepScroll: true });
     const key = params.pesel || params.nip;
     if (key) {
       const hit = lookupById(key);
@@ -2440,6 +2780,12 @@ const ZobowiazaniModule = (() => {
     toggleSuspend,
     archivePerson,
     applyArchiveIds,
+    afterExcelRefresh,
+    isSuspended,
+    archiveByKey,
+    markWroItem,
+    invalidateListCache,
+    refreshAfterWroSync() { invalidateListCache(); if (activated) renderViews(); },
     openRowMenu,
     openTabMenu,
     syncCepik: syncCepikForPerson,
