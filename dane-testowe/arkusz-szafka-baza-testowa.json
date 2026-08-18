@@ -1,0 +1,25 @@
+{
+  "workbook": "Baza testowa — 14 osób",
+  "sheets": [
+    {
+      "name": "Zobowiązani",
+      "columns": ["Nazwisko i imię", "PESEL", "NIP", "Ulica", "Miasto", "Kod pocztowy", "Sygnatura", "Kwota", "KAWA", "SINF", "UFG", "JPK", "INFZ", "Stan", "Komplet", "Notatka", "Wróć", "Zawieszone"],
+      "rows": [
+        ["Kowalski Jan (1)",  "90010112345", "", "ul. Kwiatowa 1",   "Wrocław",   "50-001", "EGZ 1/2026",  "15000", "05.01.2026", "05.01.2026", "05.01.2026", "05.01.2026", "05.01.2026", "Komplet",   "05.01.2026", "Teczka bez danych WRO — do testu \"brak synchronizacji\"", "", ""],
+        ["Kowalski Jan (2)",  "85051267890", "", "ul. Słoneczna 2",  "Wrocław",   "50-002", "EGZ 2/2026",  "22000", "06.01.2026", "06.01.2026", "06.01.2026", "06.01.2026", "06.01.2026", "Komplet",   "06.01.2026", "Ma OGNIVO + STIR — do testu \"nowość WRO\"", "", ""],
+        ["Kowalski Jan (3)",  "78091054321", "", "ul. Leśna 3",      "Opole",     "45-003", "EGZ 3/2026",  "8000",  "07.01.2026", "07.01.2026", "",           "",           "",           "Częściowo", "",           "Ma AUM + Dochody 60000 — test filtra dochodów", "", ""],
+        ["Kowalski Jan (4)",  "92030198765", "", "ul. Polna 4",      "Opole",     "45-004", "EGZ 4/2026",  "31000", "",           "",           "",           "",           "",           "Braki",     "",           "Ma JPK + Raporter — braki systemów", "", ""],
+        ["Kowalski Jan (5)",  "88121223456", "", "ul. Ogrodowa 5",   "Poznań",    "60-005", "EGZ 5/2026",  "17500", "08.01.2026", "08.01.2026", "08.01.2026", "",           "",           "Częściowo", "",           "Ma STIR + Księgi Wieczyste", "", ""],
+        ["Kowalski Jan (6)",  "95070734567", "", "ul. Wiosenna 6",   "Poznań",    "60-006", "EGZ 6/2026",  "9200",  "09.01.2026", "09.01.2026", "09.01.2026", "09.01.2026", "09.01.2026", "Komplet",   "09.01.2026", "Zawieszona — WRO ma OGNIVO, ale bez alertu nowości", "", "01.08.2026"],
+        ["Kowalski Jan (7)",  "82041545678", "", "ul. Letnia 7",     "Kraków",    "30-007", "EGZ 7/2026",  "26000", "10.01.2026", "10.01.2026", "",           "",           "",           "Częściowo", "",           "Zawieszona — WRO ma AUM + STIR, bez alertu nowości", "", "02.08.2026"],
+        ["Kowalski Jan (8)",  "91112856789", "", "ul. Zimowa 8",     "Kraków",    "30-008", "EGZ 8/2026",  "4300",  "",           "",           "",           "",           "",           "Braki",     "",           "Bez danych WRO", "", ""],
+        ["Kowalski Jan (9)",  "87061967890", "", "ul. Jesienna 9",   "Gdańsk",    "80-009", "EGZ 9/2026",  "12800", "11.01.2026", "11.01.2026", "",           "",           "",           "Częściowo", "",           "Bez danych WRO", "", ""],
+        ["Kowalski Jan (10)", "93022078901", "", "ul. Dębowa 10",    "Gdańsk",    "80-010", "EGZ 10/2026", "19900", "12.01.2026", "12.01.2026", "12.01.2026", "12.01.2026", "12.01.2026", "Komplet",   "12.01.2026", "Ma CRCM + Kontrahenci: ZAKUP (info, bez alertu)", "", ""],
+        ["Firma Kowalski Sp. z o.o. (11)", "", "1234567890", "ul. Fabryczna 11", "Wrocław", "50-011", "EGZ 11/2026", "54000", "13.01.2026", "13.01.2026", "13.01.2026", "13.01.2026", "13.01.2026", "Komplet", "13.01.2026", "Dopasowanie po NIP — UFG CEPIK + JPK", "", ""],
+        ["Firma Nowak i Wspólnicy (12)",   "", "9876543210", "ul. Handlowa 12",  "Poznań",  "60-012", "EGZ 12/2026", "38000", "14.01.2026", "14.01.2026", "",           "",           "",           "Częściowo", "",           "Dopasowanie po NIP — Przychód + OGNIVO", "", ""],
+        ["Kowalski Jan (14)", "84030412345", "", "ul. Malinowa 14",  "Katowice",  "40-014", "EGZ 14/2026", "61000", "15.01.2026", "15.01.2026", "15.01.2026", "15.01.2026", "15.01.2026", "Komplet",   "15.01.2026", "Dochody 120000 — wysoki dochód (badge)", "", ""],
+        ["Kowalski Jan (15)", "90111523456", "", "ul. Wisienki 15",  "Katowice",  "40-015", "EGZ 15/2026", "43000", "",           "",           "",           "",           "",           "Braki",     "",           "Komplet danych WRO — OGNIVO+STIR+AUM+JPK+Dochody+Kontrahenci", "", ""]
+      ]
+    }
+  ]
+}
