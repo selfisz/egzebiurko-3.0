@@ -50,6 +50,8 @@ const ZobowiazaniModule = (() => {
   let _virtBound = false;
   let _virtRaf = 0;
   let minDochodFilter = 0;
+  let _wroItemCtx = {};
+  let _wroItemSeq = 0;
   restoreOpenTabs();
 
   function invalidateListCache() {
@@ -1035,21 +1037,25 @@ const ZobowiazaniModule = (() => {
         (ann && (ann.status === 'done' || ann.status === 'excluded') ? knownRows : todoRows).push({ r, fp, ann });
       });
       const showTodo = !suspended;
+      const sectionBid = 'zwks' + (++_wroItemSeq);
 
-      const rowCard = (item, known) => `
+      const rowCard = (item, known) => {
+        const ctxId = 'zwk' + (++_wroItemSeq);
+        _wroItemCtx[ctxId] = { pk, safe, fp: item.fp };
+        return `
         <div class="wro-card ${item.ann?.status === 'excluded' ? 'wro-card-excl' : item.ann?.status === 'done' ? 'wro-card-done' : ''}" style="margin-bottom:6px">
           <div class="wro-card-hdr">
             <span>${escapeHtml(wroRowPreview(headers, item.r))}</span>
             ${known
-              ? `<button class="wro-annot-btn" style="background:#e2e8f0;color:#475569" onclick="ZobowiazaniModule.markWroItem('${pk}','${safe}','${encodeURIComponent(item.fp)}',null)">↩️ Wróć do „do zajęcia”</button>`
+              ? `<button class="wro-annot-btn" style="background:#e2e8f0;color:#475569" onclick="ZobowiazaniModule.markWroItem('${ctxId}',null)">↩️ Wróć do „do zajęcia”</button>`
               : `<span style="display:flex;gap:4px">
-                  <button class="wro-annot-btn" style="background:#dcfce7;color:#166534" onclick="ZobowiazaniModule.markWroItem('${pk}','${safe}','${encodeURIComponent(item.fp)}','done')">✅ Zrobione</button>
-                  <button class="wro-annot-btn" style="background:#fee2e2;color:#991b1b" onclick="ZobowiazaniModule.markWroItem('${pk}','${safe}','${encodeURIComponent(item.fp)}','excluded')">⛔ Wyklucz</button>
+                  <button class="wro-annot-btn" style="background:#dcfce7;color:#166534" onclick="ZobowiazaniModule.markWroItem('${ctxId}','done')">✅ Zrobione</button>
+                  <button class="wro-annot-btn" style="background:#fee2e2;color:#991b1b" onclick="ZobowiazaniModule.markWroItem('${ctxId}','excluded')">⛔ Wyklucz</button>
                 </span>`}
           </div>
         </div>`;
+      };
 
-      const bid = 'zwk' + Math.random().toString(36).slice(2, 8);
       return `<div class="zob-sheet">
         <div class="zob-sheet-title">
           <span>${icon} ${escapeHtml(label)} <span class="zob-asset-n">${rows.length}</span>${suspended ? ' <span class="zob-asset-n" style="background:rgba(122,85,36,.18);color:#7a5524">⏸ zawieszona — bez alertów</span>' : ''}</span>
@@ -1062,7 +1068,7 @@ const ZobowiazaniModule = (() => {
           <div class="wro-known-toggle" onclick="(function(el){const g=el.nextElementSibling;g.classList.toggle('wro-known-hidden');el.classList.toggle('expanded');el.querySelector('.wro-known-arrow').textContent=g.classList.contains('wro-known-hidden')?'▶':'▼'})(this)">
             <span>👁 Pokaż znane (${knownRows.length})</span><span class="wro-known-arrow">▶</span>
           </div>
-          <div class="wro-known-hidden" id="${bid}">${knownRows.map(it => rowCard(it, true)).join('')}</div>
+          <div class="wro-known-hidden" id="${sectionBid}">${knownRows.map(it => rowCard(it, true)).join('')}</div>
         ` : ''}
       </div>`;
     }).join('');
@@ -2544,9 +2550,11 @@ const ZobowiazaniModule = (() => {
     return true;
   }
 
-  function markWroItem(personKey, sectionSafe, fingerprint, status) {
+  function markWroItem(ctxId, status) {
+    const ctx = _wroItemCtx[ctxId];
+    if (!ctx) return;
     if (typeof WroModule === 'undefined' || !WroModule.setAnnotationData) return;
-    WroModule.setAnnotationData(personKey, sectionSafe, fingerprint, status ? { status } : null);
+    WroModule.setAnnotationData(ctx.pk, ctx.safe, ctx.fp, status ? { status } : null);
     invalidateListCache();
     renderDetailOnly();
     updatePillsBar();
@@ -2856,6 +2864,7 @@ const ZobowiazaniModule = (() => {
     archiveByKey,
     markWroItem,
     setMinDochod,
+    setDetailTab,
     invalidateListCache,
     refreshAfterWroSync() { invalidateListCache(); if (activated) renderViews(); },
     openRowMenu,
