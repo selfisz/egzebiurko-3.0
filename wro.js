@@ -12,6 +12,7 @@ const WroModule = (() => {
   let bazaDanych = {};
   let entities   = [];
   let activeFilters = new Set();
+  let filterNoFolder = false;
   let currentActiveId = null;
   let activated   = false;
   let _currentAnnotBid = null;
@@ -182,15 +183,26 @@ const WroModule = (() => {
     showSyncSummaryDialog({ added: addedN, updated: updatedN, missing: missingList, news: newsN, goneCount: store.pendingGone.length });
   }
 
+  let _lastMissingList = [];
+
   function showSyncSummaryDialog(summary) {
+    _lastMissingList = summary.missing || [];
     let dlg = document.getElementById('wro-sync-dlg');
     if (!dlg) {
       dlg = document.createElement('div');
       dlg.id = 'wro-sync-dlg';
       document.body.appendChild(dlg);
     }
+    const missRows = summary.missing.slice(0, 25).map((m, i) => `
+      <button type="button" class="wro-missing-row" onclick="WroModule.jumpToMissingEntity(${i})">
+        <span>${escWro(m.name)}</span><span class="wro-missing-go">Otwórz w WRO →</span>
+      </button>`).join('');
     const missHtml = summary.missing.length
-      ? `<div class="wro-ldlg-note">Bez teczki: ${summary.missing.slice(0, 8).map(m => escWro(m.name)).join(', ')}${summary.missing.length > 8 ? '…' : ''}</div>`
+      ? `<div class="wro-ldlg-note" style="text-align:left;padding:6px">
+          <div style="font-weight:700;margin-bottom:6px;padding:0 6px">📂 Bez teczki w Szafce — kliknij, aby otworzyć i dopasować ręcznie:</div>
+          <div class="wro-missing-list">${missRows}</div>
+          ${summary.missing.length > 25 ? `<div style="padding:6px 6px 0;font-size:.75rem">…i ${summary.missing.length - 25} więcej — użyj filtra „Bez teczki” w WRO.</div>` : ''}
+        </div>`
       : '';
     dlg.innerHTML = `
       <div class="wro-ldlg-overlay" onclick="document.getElementById('wro-sync-dlg').style.display='none'">
@@ -206,12 +218,28 @@ const WroModule = (() => {
           ${summary.goneCount > 0 ? `<div class="wro-ldlg-note wro-ldlg-first">⚠️ ${summary.goneCount} zniknięć do przeglądu — dane, które osoba miała wcześniej, a już ich nie ma w tym raporcie.</div>` : ''}
           <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
             ${summary.goneCount > 0 ? `<button class="wro-ldlg-close" style="flex:1;background:#b45309" onclick="document.getElementById('wro-sync-dlg').style.display='none';WroModule.reviewGoneQueue()">Przejrzyj zniknięcia (${summary.goneCount})</button>` : ''}
+            ${summary.missing.length > 0 ? `<button class="wro-ldlg-close" style="flex:1;background:#475569" onclick="document.getElementById('wro-sync-dlg').style.display='none';WroModule.filterMissingFolders()">Filtruj listę: bez teczki</button>` : ''}
             <button class="wro-ldlg-close" style="flex:1" onclick="document.getElementById('wro-sync-dlg').style.display='none'">Zamknij</button>
           </div>
         </div>
       </div>`;
     dlg.style.display = 'block';
     refreshSyncButtons();
+  }
+
+  function jumpToMissingEntity(idx) {
+    const item = _lastMissingList[idx];
+    if (!item) return;
+    const dlg = document.getElementById('wro-sync-dlg');
+    if (dlg) dlg.style.display = 'none';
+    selectEntity(item.id);
+  }
+
+  function filterMissingFolders() {
+    filterNoFolder = true;
+    const chip = document.querySelector('.wro-chip-warn');
+    if (chip) chip.classList.add('active');
+    renderList(document.getElementById('wro-search')?.value || '');
   }
 
   function reviewGoneQueue() {
@@ -725,6 +753,16 @@ const WroModule = (() => {
     const fc = document.getElementById('wro-filters');
     if (!fc) return;
     fc.innerHTML = '';
+    const noFolderChip = document.createElement('div');
+    noFolderChip.className = 'wro-chip wro-chip-warn' + (filterNoFolder ? ' active' : '');
+    noFolderChip.innerHTML = '🗂 Bez teczki w Szafce';
+    noFolderChip.title = 'Podmioty bez dopasowanej teczki (PESEL/NIP) w Szafce';
+    noFolderChip.onclick = () => {
+      filterNoFolder = !filterNoFolder;
+      noFolderChip.classList.toggle('active', filterNoFolder);
+      renderList(document.getElementById('wro-search')?.value || '');
+    };
+    fc.appendChild(noFolderChip);
     sourceNames.forEach(src => {
       const chip = document.createElement('div');
       chip.className = 'wro-chip';
@@ -764,8 +802,13 @@ const WroModule = (() => {
         }
       }
       if (minDochodFilter && getMaxDochodForEntity(item.id) < minDochodFilter) return false;
+      if (filterNoFolder) {
+        const view = resolveEntityView(item.id, arkIndex);
+        item._view = view;
+        if (view.person) return false;
+      }
       if (!lf) return true;
-      const view = resolveEntityView(item.id, arkIndex);
+      const view = item._view || resolveEntityView(item.id, arkIndex);
       item._view = view;
       const blob = [item.id, view.displayName, view.a3, view.b3, view.person && view.person.name].filter(Boolean).join(' ').toLowerCase();
       return blob.includes(lf);
@@ -1597,6 +1640,7 @@ const WroModule = (() => {
     openAnnotPopover, showAnnotExcludeForm, setAnnotStatus,
     setMinDochod,
     syncToSzafka, reviewGoneQueue, goneDecision,
+    jumpToMissingEntity, filterMissingFolders,
     getAnnotation, setAnnotationData,
     getMajatekSnapshot, personHasSection, hasPendingItemsForKey,
     getPendingGoneCount, getSourceCatalog,

@@ -568,6 +568,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
 }
 .wro-chip:hover{background:rgba(255,255,255,.12);color:#d0e4f5}
 .wro-chip.active{background:var(--accent);color:#fff;border-color:var(--accent);font-weight:650}
+.wro-chip-warn.active{background:#b45309;border-color:#b45309;color:#fff}
 .wro-list{flex:1;overflow-y:auto;min-height:0}
 .wro-list::-webkit-scrollbar{width:6px}
 .wro-list::-webkit-scrollbar-thumb{background:#374151;border-radius:3px}
@@ -826,6 +827,15 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
   padding:8px 12px;background:var(--zebra);border-radius:6px;margin-bottom:12px;
 }
 .wro-ldlg-first{color:var(--accent)}
+.wro-missing-list{max-height:180px;overflow-y:auto;display:flex;flex-direction:column;gap:4px}
+.wro-missing-row{
+  display:flex;align-items:center;justify-content:space-between;gap:10px;
+  width:100%;text-align:left;background:var(--panel);border:1px solid var(--line);
+  border-radius:7px;padding:7px 10px;font:inherit;font-size:.8rem;color:var(--text);
+  cursor:pointer;transition:.15s;
+}
+.wro-missing-row:hover{border-color:var(--accent);background:var(--soft)}
+.wro-missing-go{font-size:.72rem;font-weight:700;color:var(--accent);flex-shrink:0;white-space:nowrap}
 .wro-ldlg-close{
   width:100%;padding:10px;background:var(--accent);color:#fff;
   border:none;border-radius:8px;font-size:.9rem;font-weight:600;cursor:pointer;
