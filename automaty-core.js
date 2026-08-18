@@ -329,45 +329,69 @@
     return rows;
   }
 
-  function firstSheetPath(files) {
+  function resolveSheetPath(target) {
+    let t = String(target || '').replace(/\\/g, '/');
+    if (t.startsWith('/')) t = t.replace(/^\//, '');
+    else if (!t.startsWith('xl/')) t = 'xl/' + t.replace(/^\.\//, '');
+    return t;
+  }
+
+  function listWorkbookSheets(files) {
     const wb = files['xl/workbook.xml'];
     const rels = files['xl/_rels/workbook.xml.rels'];
-    if (wb && rels) {
-      const sheets = [];
-      const shRe = /<(?:[\w.]+:)?sheet\b([^>]*)\/?>/g;
-      let m;
-      while ((m = shRe.exec(wb))) {
-        const idM = m[1].match(/\br:id="([^"]+)"/) || m[1].match(/\bid="([^"]+)"/);
-        if (idM) sheets.push(idM[1]);
-      }
-      const relMap = {};
+    const relMap = {};
+    if (rels) {
       const rRe = /<(?:[\w.]+:)?Relationship\b([^>]*)\/?>/g;
+      let m;
       while ((m = rRe.exec(rels))) {
         const id = (m[1].match(/\bId="([^"]+)"/) || [])[1];
         const target = (m[1].match(/\bTarget="([^"]+)"/) || [])[1];
-        if (id && target) relMap[id] = target.replace(/\\/g, '/');
-      }
-      if (sheets[0] && relMap[sheets[0]]) {
-        let t = relMap[sheets[0]];
-        if (t.startsWith('/')) t = t.replace(/^\//, '');
-        else if (!t.startsWith('xl/')) t = 'xl/' + t.replace(/^\.\//, '');
-        if (files[t]) return t;
+        if (id && target) relMap[id] = resolveSheetPath(target);
       }
     }
-    const names = Object.keys(files).filter(n => /^xl\/worksheets\/sheet\d+\.xml$/i.test(n)).sort();
-    return names[0] || null;
+    const out = [];
+    if (wb) {
+      const shRe = /<(?:[\w.]+:)?sheet\b([^>]*)\/?>/g;
+      let m;
+      while ((m = shRe.exec(wb))) {
+        const nameM = m[1].match(/\bname="([^"]+)"/);
+        const idM = m[1].match(/\br:id="([^"]+)"/) || m[1].match(/\bid="([^"]+)"/);
+        const name = nameM ? xmlUnescape(nameM[1]) : '';
+        const path = idM && relMap[idM[1]] ? relMap[idM[1]] : '';
+        if (name) out.push({ name, path });
+      }
+    }
+    if (!out.length) {
+      const names = Object.keys(files).filter(n => /^xl\/worksheets\/sheet\d+\.xml$/i.test(n)).sort();
+      names.forEach((path, i) => out.push({ name: 'Sheet' + (i + 1), path }));
+    }
+    return out;
   }
 
-  async function readXlsxFirstSheet(arrayBuffer) {
+  function firstSheetPath(files) {
+    const list = listWorkbookSheets(files);
+    for (let i = 0; i < list.length; i++) {
+      if (list[i].path && files[list[i].path]) return list[i].path;
+    }
+    return null;
+  }
+
+  async function loadXlsxXmlFiles(arrayBuffer) {
     const u8 = arrayBuffer instanceof Uint8Array ? arrayBuffer : new Uint8Array(arrayBuffer);
     const listing = listZipEntries(u8);
     const files = {};
     for (const entry of listing) {
-      if (!/\.xml$/i.test(entry.name)) continue;
-      if (!/^xl\//i.test(entry.name) && entry.name !== '[Content_Types].xml') continue;
+      const n = entry.name.replace(/^\/+/, '').replace(/\\/g, '/');
+      if (!/\.xml(\.rels)?$/i.test(n)) continue;
+      if (!/^xl\/(workbook\.xml|_rels\/workbook\.xml\.rels|sharedStrings\.xml|worksheets\/[^/]+\.xml)$/i.test(n)) continue;
       const data = await readZipFile(u8, entry);
-      files[entry.name.replace(/^\/+/, '')] = new TextDecoder('utf-8').decode(data);
+      files[n] = new TextDecoder('utf-8').decode(data);
     }
+    return files;
+  }
+
+  async function readXlsxFirstSheet(arrayBuffer) {
+    const files = await loadXlsxXmlFiles(arrayBuffer);
     const sheetPath = firstSheetPath(files);
     if (!sheetPath || !files[sheetPath]) {
       throw new Error('XLSX: nie znaleziono arkusza (Sheets(1))');
@@ -375,6 +399,243 @@
     const shared = files['xl/sharedStrings.xml'] ? parseSharedStrings(files['xl/sharedStrings.xml']) : [];
     const rows = parseSheetXml(files[sheetPath], shared);
     return { rows, separator: '', kind: 'xlsx' };
+  }
+
+  async function readXlsxWorkbook(arrayBuffer) {
+    const files = await loadXlsxXmlFiles(arrayBuffer);
+    const shared = files['xl/sharedStrings.xml'] ? parseSharedStrings(files['xl/sharedStrings.xml']) : [];
+    const list = listWorkbookSheets(files);
+    const sheets = {};
+    const sheetOrder = [];
+    for (let i = 0; i < list.length; i++) {
+      const item = list[i];
+      sheetOrder.push(item.name);
+      sheets[item.name] = (item.path && files[item.path]) ? parseSheetXml(files[item.path], shared) : [];
+    }
+    return { sheets, sheetOrder, kind: 'xlsx' };
+  }
+
+  function trimTable(rows) {
+    if (!rows || !rows.length) return [];
+    let last = rows.length - 1;
+    while (last >= 0 && (rows[last] || []).every(c => String(c || '').trim() === '')) last--;
+    if (last < 0) return [];
+    return rows.slice(0, last + 1);
+  }
+
+  function sheetNorm(name) {
+    return String(name || '').toUpperCase().replace(/Ą/g, 'A').replace(/Ć/g, 'C').replace(/Ę/g, 'E')
+      .replace(/Ł/g, 'L').replace(/Ń/g, 'N').replace(/Ó/g, 'O').replace(/Ś/g, 'S').replace(/Ź|Ż/g, 'Z')
+      .replace(/\s+/g, '');
+  }
+
+  function wroSectionFromSheetName(name) {
+    const compact = sheetNorm(name);
+    if (!compact) return null;
+    if (compact === 'RAPORTER') return 'Raporter';
+    if (compact === 'STIR') return 'STIR';
+    if (compact === 'KW' || compact.indexOf('KSIEGI') >= 0) return 'Księgi Wieczyste';
+    if (compact === 'CRCM') return 'CRCM';
+    if (compact === 'DOCHODY') return 'Dochody';
+    if (compact.indexOf('PRZYCH') === 0) return 'Przychód';
+    if (compact.indexOf('UFG') >= 0 || compact.indexOf('CEPIK') >= 0) return 'UFG CEPIK';
+    if (compact.indexOf('CRPZAKONCZENIE') >= 0) return '_crp';
+    if (compact.indexOf('SPRZEDAZ') >= 0 || compact.indexOf('SPRZEDA') >= 0) return 'Kontrahenci: SPRZEDAŻ';
+    if (compact.indexOf('ZAKUP') >= 0) return 'Kontrahenci: ZAKUP';
+    if (compact.indexOf('KONTRAHENT') >= 0) return '_kontrahenci';
+    return null;
+  }
+
+  function classifyWroFolderFile(name) {
+    const base = String(name || '').toUpperCase().split(/[/\\]/).pop() || '';
+    if (base.indexOf('~$') === 0) return null;
+    const dump = classifyDumpName(name);
+    if (dump === 'see11' || dump === 'see18' || dump === 'platforma') return null;
+    if (dump === 'ognivo') return 'ognivo';
+    if (dump === 'aum') return 'aum';
+    if (dump === 'jpk') return 'jpk';
+    const lower = String(name || '').toLowerCase();
+    if (!/\.xlsx$|\.xlsm$/.test(lower)) return null;
+    return 'dossier';
+  }
+
+  function idKeysFromDigits(raw) {
+    const d = String(raw || '').replace(/\D/g, '');
+    if (!d) return [];
+    const keys = [d];
+    if (d.length === 10) keys.push('0' + d);
+    if (d.length === 9) keys.push('00' + d);
+    return keys;
+  }
+
+  function idFromFilename(name) {
+    const base = String(name || '').split(/[/\\]/).pop().replace(/\.[^.]+$/, '');
+    const m = base.match(/(\d{9,11})/);
+    return m ? m[1] : '';
+  }
+
+  function firstNonEmpty(rows, r1, c1) {
+    return cell((rows && rows[r1 - 1]) || [], c1);
+  }
+
+  function splitKontrahenci(rows) {
+    const table = trimTable(rows);
+    if (table.length < 2) return {};
+    const headers = (table[0] || []).map(h => getStr(h).toLowerCase());
+    const idx = headers.findIndex(h => /sprzeda|zakup|kierunek|strona|typ/.test(h));
+    if (idx < 0) return { 'Kontrahenci: SPRZEDAŻ': table };
+    const sprzedaz = [table[0]];
+    const zakup = [table[0]];
+    for (let i = 1; i < table.length; i++) {
+      const v = getStr(table[i][idx]).toUpperCase();
+      if (/ZAKUP/.test(v)) zakup.push(table[i]);
+      else sprzedaz.push(table[i]);
+    }
+    const out = {};
+    if (sprzedaz.length > 1) out['Kontrahenci: SPRZEDAŻ'] = sprzedaz;
+    if (zakup.length > 1) out['Kontrahenci: ZAKUP'] = zakup;
+    return out;
+  }
+
+  function dossierFromWorkbook(fileName, workbook) {
+    const sheets = (workbook && workbook.sheets) || {};
+    const order = (workbook && workbook.sheetOrder) || Object.keys(sheets);
+    const firstName = order[0];
+    const first = sheets[firstName] || [];
+    let crp = [];
+    Object.keys(sheets).forEach(n => {
+      if (wroSectionFromSheetName(n) === '_crp') crp = sheets[n] || [];
+    });
+    const fromCrp = cleanCyfry(firstNonEmpty(crp, 3, 3));
+    const fromFile = idFromFilename(fileName);
+    const a3 = cleanNIP(firstNonEmpty(first, 3, 1));
+    const b3 = cleanPESEL(firstNonEmpty(first, 3, 2)) || (cleanCyfry(firstNonEmpty(first, 3, 2)).length === 11 ? cleanCyfry(firstNonEmpty(first, 3, 2)) : '');
+    const id = fromCrp || b3 || a3 || fromFile || fileName;
+    const entity = {
+      _meta: {
+        a3: a3,
+        b3: b3,
+        plik: String(fileName || '').split(/[/\\]/).pop()
+      }
+    };
+    order.forEach(n => {
+      const section = wroSectionFromSheetName(n);
+      if (!section || section === '_crp') return;
+      const table = trimTable(sheets[n]);
+      if (section === '_kontrahenci') {
+        Object.assign(entity, splitKontrahenci(table));
+        return;
+      }
+      if (table.length > 1) entity[section] = table;
+    });
+    return { id, entity };
+  }
+
+  function actionRowsById(rows) {
+    const table = trimTable(rows);
+    const byId = {};
+    if (table.length < 2) return byId;
+    const header = table[0];
+    for (let i = 1; i < table.length; i++) {
+      const found = {};
+      (table[i] || []).forEach(c => {
+        idKeysFromDigits(c).forEach(k => {
+          if (k.length === 10 || k.length === 11) found[k] = true;
+        });
+      });
+      const keys = Object.keys(found);
+      if (!keys.length) continue;
+      keys.forEach(k => {
+        if (!byId[k]) byId[k] = { headers: header, rows: [] };
+        byId[k].rows.push(table[i]);
+      });
+    }
+    return byId;
+  }
+
+  function lookupEntityKey(db, rawId) {
+    const keys = idKeysFromDigits(rawId);
+    for (let i = 0; i < keys.length; i++) {
+      if (db[keys[i]]) return keys[i];
+    }
+    const want = {};
+    keys.forEach(k => { want[k] = true; });
+    const ids = Object.keys(db);
+    for (let i = 0; i < ids.length; i++) {
+      const ent = db[ids[i]];
+      const meta = (ent && ent._meta) || {};
+      const a3 = String(meta.a3 || '').replace(/\D/g, '');
+      const b3 = String(meta.b3 || '').replace(/\D/g, '');
+      if (want[ids[i]] || want[a3] || want[b3]) return ids[i];
+    }
+    return keys[0] || String(rawId || '');
+  }
+
+  function injectActions(db, kind, byId) {
+    const section = kind === 'ognivo' ? 'Wynik: OGNIVO' : kind === 'aum' ? 'Wynik: AUM' : 'Wynik: JPK';
+    Object.keys(byId).forEach(id => {
+      const pack = byId[id];
+      if (!pack || !pack.rows || !pack.rows.length) return;
+      const key = lookupEntityKey(db, id);
+      if (!db[key]) {
+        const pesel = id.length === 11 ? id : '';
+        const nip = id.length === 10 ? id : '';
+        db[key] = { _meta: { a3: nip, b3: pesel, plik: section } };
+      }
+      const existing = db[key][section];
+      if (!existing || existing.length < 2) {
+        db[key][section] = [pack.headers].concat(pack.rows);
+      } else {
+        pack.rows.forEach(r => existing.push(r));
+      }
+    });
+  }
+
+  function overlayWynik(newDb, oldDb) {
+    if (!oldDb || typeof oldDb !== 'object') return newDb;
+    Object.keys(oldDb).forEach(id => {
+      const old = oldDb[id];
+      if (!old) return;
+      Object.keys(old).forEach(k => {
+        if (!k.startsWith('Wynik:')) return;
+        if (!Array.isArray(old[k]) || old[k].length <= 1) return;
+        const key = lookupEntityKey(newDb, id) || id;
+        if (!newDb[key]) {
+          newDb[key] = { _meta: old._meta || {} };
+        }
+        if (!newDb[key][k] || newDb[key][k].length <= 1) {
+          newDb[key][k] = old[k];
+        }
+      });
+    });
+    return newDb;
+  }
+
+  function buildWroBaza(input) {
+    const dossiers = (input && input.dossiers) || [];
+    const actions = (input && input.actions) || [];
+    const db = {};
+    dossiers.forEach(item => {
+      const got = dossierFromWorkbook(item.name, item.workbook);
+      if (!got || !got.id) return;
+      if (!db[got.id]) db[got.id] = got.entity;
+      else {
+        Object.keys(got.entity).forEach(k => {
+          if (k === '_meta') {
+            db[got.id]._meta = Object.assign({}, got.entity._meta, db[got.id]._meta);
+            return;
+          }
+          if (!db[got.id][k] || db[got.id][k].length <= 1) db[got.id][k] = got.entity[k];
+        });
+      }
+    });
+    actions.forEach(item => {
+      const firstName = (item.workbook.sheetOrder || Object.keys(item.workbook.sheets || {}))[0];
+      const rows = (item.workbook.sheets || {})[firstName] || [];
+      injectActions(db, item.kind, actionRowsById(rows));
+    });
+    overlayWynik(db, input && input.existing);
+    return db;
   }
 
   function classifyDumpName(name) {
@@ -388,6 +649,7 @@
       return 'see18';
     }
     if (base.indexOf('OGNIVO') >= 0 || base.indexOf('OGNIVKO') >= 0) return 'ognivo';
+    if (base.indexOf('JPK') >= 0) return 'jpk';
     if (base.indexOf('AUM') >= 0) return 'aum';
     if (base.indexOf('PLATFORMA') >= 0 || base.indexOf('ANALITYCZNA') >= 0) return 'platforma';
     return null;
@@ -1104,7 +1366,9 @@
     wczytajCsvTekst,
     decodeTextBuffer,
     readXlsxFirstSheet,
+    readXlsxWorkbook,
     classifyDumpName,
+    classifyWroFolderFile,
     tableFromFile,
     cell,
     normalizujNazweBanku,
@@ -1122,7 +1386,12 @@
     timestampStamp,
     findOgnivoStartRow,
     detectAumLayout,
-    splitAumAccounts
+    splitAumAccounts,
+    wroSectionFromSheetName,
+    dossierFromWorkbook,
+    actionRowsById,
+    buildWroBaza,
+    overlayWynik
   };
 
   root.AutomatyCore = AutomatyCore;

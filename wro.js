@@ -447,14 +447,26 @@ const WroModule = (() => {
             </label>
 
             <div class="wro-zrzutnia">
-              <div class="wro-zrzutnia-title">Zrzutnia</div>
-              <button type="button" class="wro-zrzutnia-folder" id="wro-zrzutnia-btn">📂 Wskaż folder</button>
+              <div class="wro-zrzutnia-title">Zrzutnia (sita)</div>
+              <button type="button" class="wro-zrzutnia-folder" id="wro-zrzutnia-btn">📂 Folder SEE / AUM / Platforma</button>
               <input type="file" id="wro-zrzutnia-input" webkitdirectory directory multiple hidden>
               <div class="wro-zrzutnia-files" id="wro-zrzutnia-files"></div>
               <div class="wro-zrzutnia-runs">
                 <button type="button" onclick="WroModule.runZrzutnia('jpk')">JPK</button>
                 <button type="button" onclick="WroModule.runZrzutnia('ognivo')">OGNIVO</button>
                 <button type="button" onclick="WroModule.runZrzutnia('aum')">AUM</button>
+              </div>
+            </div>
+
+            <div class="wro-zrzutnia">
+              <div class="wro-zrzutnia-title">Teczki WRO</div>
+              <button type="button" class="wro-zrzutnia-folder" id="wro-teczki-btn">📂 Folder teczek (~xlsx)</button>
+              <input type="file" id="wro-teczki-input" webkitdirectory directory multiple hidden>
+              <div class="wro-zrzutnia-files" id="wro-teczki-files"></div>
+              <button type="button" class="wro-zrzutnia-build" id="wro-teczki-build" onclick="WroModule.buildBazaFromFolder()">▶ Zbuduj bazę WRO</button>
+              <div class="wro-zrzutnia-prog" id="wro-teczki-prog" hidden>
+                <div class="wro-zrzutnia-bar"><span id="wro-teczki-bar"></span></div>
+                <div class="wro-zrzutnia-prog-txt" id="wro-teczki-prog-txt"></div>
               </div>
             </div>
 
@@ -496,7 +508,7 @@ const WroModule = (() => {
           <div class="wro-list" id="wro-list">
             <div class="wro-empty-list">
               Brak wczytanych danych.<br>
-              Wskaż folder zrzutni albo wczytaj bazę .js.
+              Wskaż folder teczek WRO albo zrzutnię, albo wczytaj bazę .js.
             </div>
           </div>
         </aside>
@@ -506,7 +518,7 @@ const WroModule = (() => {
             <div class="wro-empty-card">
               <div class="wro-empty-icon">📊</div>
               <h3>Analityka WRO</h3>
-              <p>Wskaż folder zrzutni (SEE.11, SEE.18, AUM, Platforma, OGNIVO) i kliknij JPK / OGNIVO / AUM — wynik wejdzie na listę. Albo wczytaj gotową bazę .js z Excela.</p>
+              <p>Dwa foldery, jak w Excelu: <strong>zrzutnia</strong> (sita JPK/OGNIVO/AUM) i <strong>teczki WRO</strong> (~setki xlsx → jedna baza). Albo wczytaj gotowy <code>baza_danych.js</code>.</p>
               ${Object.keys(bazaDanych).length > 0
                 ? `<p class="wro-db-info">✅ Baza załadowana: ${Object.keys(bazaDanych).length} podmiotów</p>`
                 : ''}
@@ -519,6 +531,7 @@ const WroModule = (() => {
     bindEvents();
     initFilters();
     paintZrzutnia();
+    paintTeczki();
     if (entities.length > 0) renderList('');
     refreshSyncButtons();
   }
@@ -540,12 +553,33 @@ const WroModule = (() => {
     }).join('');
   }
 
+  function paintTeczki() {
+    const box = document.getElementById('wro-teczki-files');
+    const btn = document.getElementById('wro-teczki-btn');
+    if (!box || typeof AutomatyWroFolder === 'undefined') return;
+    const snap = AutomatyWroFolder.snapshot();
+    if (btn) {
+      btn.textContent = snap.folderName
+        ? ('📂 ' + snap.folderName + ' (' + snap.count + ')')
+        : '📂 Folder teczek (~xlsx)';
+    }
+    if (!snap.count) {
+      box.innerHTML = '<span class="wro-zrzutnia-chip">brak folderu</span>';
+      return;
+    }
+    box.innerHTML =
+      '<span class="wro-zrzutnia-chip ok">' + snap.dossiers + ' teczek</span>' +
+      (snap.actions ? '<span class="wro-zrzutnia-chip ok">' + snap.actions + ' OGNIVO/AUM/JPK</span>' : '');
+  }
+
   function bindEvents() {
     const fi   = document.getElementById('wro-file-input');
     const pi   = document.getElementById('wro-prog-input');
     const srch = document.getElementById('wro-search');
     const zBtn = document.getElementById('wro-zrzutnia-btn');
     const zIn  = document.getElementById('wro-zrzutnia-input');
+    const tBtn = document.getElementById('wro-teczki-btn');
+    const tIn  = document.getElementById('wro-teczki-input');
 
     if (fi) fi.addEventListener('change', handleFileLoad);
     if (pi) pi.addEventListener('change', handleProgressLoad);
@@ -562,6 +596,17 @@ const WroModule = (() => {
         } else {
           showToast('Zrzutnia: ' + snap.count + ' plików', 'success');
         }
+      });
+    }
+    if (tBtn && tIn) {
+      tBtn.addEventListener('click', () => tIn.click());
+      tIn.addEventListener('change', e => {
+        if (typeof AutomatyWroFolder === 'undefined') return;
+        const snap = AutomatyWroFolder.ingest(e.target.files);
+        e.target.value = '';
+        paintTeczki();
+        if (!snap.count) showToast('W folderze nie ma plików .xlsx / .xlsm teczek WRO', 'warn');
+        else showToast('Teczki: ' + snap.dossiers + ' + ' + snap.actions + ' wynikowych', 'success');
       });
     }
 
@@ -704,6 +749,51 @@ const WroModule = (() => {
     rebuildEntitiesFromBaza();
     persistBazaDanych();
     return { merged, created };
+  }
+
+  async function buildBazaFromFolder() {
+    if (_zrzutniaBusy) return;
+    if (typeof AutomatyWroFolder === 'undefined') {
+      if (typeof showToast === 'function') showToast('Brak silnika teczek WRO', 'error');
+      return;
+    }
+    const snap = AutomatyWroFolder.snapshot();
+    if (!snap.count) {
+      if (typeof showToast === 'function') showToast('Najpierw wskaż folder teczek WRO', 'warn');
+      return;
+    }
+    _zrzutniaBusy = true;
+    const prog = document.getElementById('wro-teczki-prog');
+    const bar = document.getElementById('wro-teczki-bar');
+    const txt = document.getElementById('wro-teczki-prog-txt');
+    const buildBtn = document.getElementById('wro-teczki-build');
+    if (prog) prog.hidden = false;
+    if (buildBtn) buildBtn.disabled = true;
+    try {
+      const result = await AutomatyWroFolder.build(bazaDanych, (done, total) => {
+        const pct = total ? Math.round(done * 100 / total) : 0;
+        if (bar) bar.style.width = pct + '%';
+        if (txt) txt.textContent = 'Czytanie ' + done + ' / ' + total;
+      });
+      if (!result.ok) {
+        if (typeof showToast === 'function') showToast(result.error || 'Nie złożono bazy', 'warn');
+        return;
+      }
+      importBazaDanych(result.db);
+      initFilters();
+      renderList(document.getElementById('wro-search')?.value || '');
+      refreshSyncButtons();
+      showLoadSummaryDialog(computeLoadSummary());
+      if (typeof showToast === 'function') {
+        showToast('Baza WRO: ' + result.people + ' podmiotów (' + result.dossiers + ' teczek)', 'success');
+      }
+    } catch (e) {
+      if (typeof showToast === 'function') showToast((e && e.message) || 'Błąd składania bazy', 'error');
+    } finally {
+      _zrzutniaBusy = false;
+      if (buildBtn) buildBtn.disabled = false;
+      if (txt && AutomatyWroFolder.snapshot().count) txt.textContent = 'Gotowe';
+    }
   }
 
   async function runZrzutnia(kind) {
@@ -1770,7 +1860,7 @@ const WroModule = (() => {
     renderCart, clearCart, exportProgress, exportMatrixCSV,
     expandAll, collapseAll,
     getCepikInfoForId, getAssetSummaryForPerson, findEntityKey,
-    getBazaDanych, importBazaDanych, mergeWynikSection, runZrzutnia, openInSzafka,
+    getBazaDanych, importBazaDanych, mergeWynikSection, runZrzutnia, buildBazaFromFolder, openInSzafka,
     openAnnotPopover, showAnnotExcludeForm, setAnnotStatus,
     setMinDochod,
     syncToSzafka, reviewGoneQueue, goneDecision,

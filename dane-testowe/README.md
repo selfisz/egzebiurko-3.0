@@ -64,9 +64,12 @@ ale aplikacja i tak dopasowuje wyłącznie po cyfrach, więc to nie ma znaczenia
 
 ## Zrzutnia w Analityce WRO
 
-W **Analityce WRO** → **Wskaż folder** (ten sam zestaw co kiedyś `A:\Automaty\1_Zrzutnia\`),
-potem przycisk **JPK** / **OGNIVO** / **AUM**. Wynik wchodzi na listę jako `Wynik: JPK` /
-`Wynik: OGNIVO` / `Wynik: AUM`.
+W **Analityce WRO** są dwa foldery, jak w Excelu:
+
+1. **Zrzutnia** — SEE.11 / SEE.18 / AUM / Platforma / OGNIVO CSV → przycisk JPK, OGNIVO albo AUM.
+2. **Teczki WRO** — folder z ~setkami xlsx osób (to, co makro `GenerujBazeDlaHTML` czytało z `_WRO`) → **Zbuduj bazę WRO**.
+
+Wynik sit i teczek ląduje na tej samej liście. Potem **Synchronizuj z Szafką**.
 
 Mini-zestaw (fikcyjne PESEL-e z bazy 15 osób):
 

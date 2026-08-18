@@ -118,3 +118,62 @@ const AutomatyZrzutnia = (() => {
 })();
 
 window.AutomatyZrzutnia = AutomatyZrzutnia;
+
+const AutomatyWroFolder = (() => {
+  let files = [];
+  let folderName = '';
+
+  function ingest(fileList) {
+    files = [];
+    folderName = '';
+    const C = window.AutomatyCore;
+    for (const file of fileList || []) {
+      const role = C.classifyWroFolderFile(file.name);
+      if (!role) continue;
+      files.push({ file, role, name: file.name });
+      const rel = file.webkitRelativePath || file.name;
+      const parts = String(rel).split(/[/\\]/);
+      if (parts.length > 1) folderName = parts[0];
+    }
+    if (!folderName && files.length) folderName = 'teczki';
+    return snapshot();
+  }
+
+  function snapshot() {
+    const dossiers = files.filter(f => f.role === 'dossier').length;
+    const actions = files.filter(f => f.role !== 'dossier').length;
+    return { folderName, count: files.length, dossiers, actions };
+  }
+
+  async function build(existing, onProgress) {
+    const C = window.AutomatyCore;
+    if (!files.length) return { ok: false, error: 'Wskaż folder z teczkami WRO (.xlsx / .xlsm).' };
+    const dossiers = [];
+    const actions = [];
+    const total = files.length;
+    const CHUNK = 8;
+    for (let i = 0; i < total; i += CHUNK) {
+      const slice = files.slice(i, i + CHUNK);
+      for (const item of slice) {
+        try {
+          const buf = await item.file.arrayBuffer();
+          const workbook = await C.readXlsxWorkbook(buf);
+          if (item.role === 'dossier') dossiers.push({ name: item.name, workbook });
+          else actions.push({ kind: item.role, name: item.name, workbook });
+        } catch (e) {
+          console.warn('[WRO folder] pominięto', item.name, e);
+        }
+      }
+      if (typeof onProgress === 'function') onProgress(Math.min(total, i + slice.length), total);
+      await new Promise(r => setTimeout(r, 0));
+    }
+    const db = C.buildWroBaza({ dossiers, actions, existing: existing || {} });
+    const n = Object.keys(db).length;
+    if (!n) return { ok: false, error: 'Nie udało się złożyć bazy z tego folderu.' };
+    return { ok: true, db, dossiers: dossiers.length, actions: actions.length, people: n };
+  }
+
+  return { ingest, snapshot, build };
+})();
+
+window.AutomatyWroFolder = AutomatyWroFolder;

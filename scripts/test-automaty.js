@@ -224,6 +224,65 @@ assert(!aum.rows.some(r => r[0] === '78091054321'), 'AUM: C=T odrzuca');
 assert(!aum.rows.some(r => r[0] === '92030198765'), 'AUM: N=W1 odrzuca');
 assert(!aum.rows.some(r => r[0] === '88121223456'), 'AUM: brak SEE.11 odrzuca');
 
+/* ── BAZA WRO Z TECZEK ───────────────────────────────────── */
+eq(C.classifyWroFolderFile('90010112345.xlsx'), 'dossier', 'teczka PESEL');
+eq(C.classifyWroFolderFile('osoba.xlsm'), 'dossier', 'teczka xlsm');
+eq(C.classifyWroFolderFile('OGNIVO_wynik.xlsx'), 'ognivo', 'plik wynikowy OGNIVO');
+eq(C.classifyWroFolderFile('JPK1_Wynik.xlsx'), 'jpk', 'plik wynikowy JPK');
+eq(C.classifyWroFolderFile('SEE.11.xlsx'), null, 'SEE.11 nie jest teczką WRO');
+eq(C.wroSectionFromSheetName('Stir'), 'STIR', 'arkusz STIR');
+eq(C.wroSectionFromSheetName('Kw'), 'Księgi Wieczyste', 'arkusz Kw');
+eq(C.wroSectionFromSheetName('UfgCepik'), 'UFG CEPIK', 'arkusz UFG');
+eq(C.wroSectionFromSheetName('CRPZakonczenie'), '_crp', 'arkusz CRP');
+
+const dossierWb = {
+  sheetOrder: ['Okladka', 'Raporter', 'STIR', 'CRPZakonczenie'],
+  sheets: {
+    Okladka: [
+      ['x'],
+      ['x'],
+      ['1111111111', '90010112345']
+    ],
+    Raporter: [
+      ['Kol1', 'Kol2'],
+      ['a', 'b']
+    ],
+    STIR: [
+      ['Rachunek'],
+      ['PL00']
+    ],
+    CRPZakonczenie: [
+      [],
+      [],
+      ['', '', '90010112345']
+    ]
+  }
+};
+const built = C.buildWroBaza({
+  dossiers: [{ name: '90010112345.xlsx', workbook: dossierWb }],
+  actions: [{
+    kind: 'ognivo',
+    name: 'OGNIVO.xlsx',
+    workbook: {
+      sheetOrder: ['Wynik'],
+      sheets: {
+        Wynik: [
+          ['PESEL', 'Bank'],
+          ['90010112345', 'Alior'],
+          ['85051267890', 'mBank']
+        ]
+      }
+    }
+  }]
+});
+assert(built['90010112345'], 'baza: teczka po C3/PESEL');
+assert(built['90010112345']['Raporter'] && built['90010112345']['Raporter'].length === 2, 'baza: Raporter');
+assert(built['90010112345']['STIR'], 'baza: STIR');
+assert(built['90010112345']['Wynik: OGNIVO'] && built['90010112345']['Wynik: OGNIVO'].length === 2, 'baza: OGNIVO wstrzyknięte do teczki');
+assert(built['85051267890'] && built['85051267890']['Wynik: OGNIVO'], 'baza: stub dla OGNIVO bez teczki');
+eq(built['90010112345']._meta.a3, '1111111111', 'meta A3 = NIP');
+eq(built['90010112345']._meta.b3, '90010112345', 'meta B3 = PESEL');
+
 /* ── XLSX pierwszy arkusz ────────────────────────────────── */
 function crc32(u8) {
   let c = 0xFFFFFFFF;
@@ -289,6 +348,17 @@ function zipStore(files) {
   eq(parsed.rows[0][6], '90010112345', 'xlsx G1');
   eq(parsed.rows[1][2], 'A', 'xlsx C2 liczba/tekst');
   eq(parsed.rows[1][13], 'A', 'xlsx N2 (kolumna 14)');
+
+  const multi = zipStore({
+    'xl/workbook.xml': '<?xml version="1.0"?><workbook xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Raporter" sheetId="1" r:id="rId1"/><sheet name="STIR" sheetId="2" r:id="rId2"/></sheets></workbook>',
+    'xl/_rels/workbook.xml.rels': '<?xml version="1.0"?><Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Target="worksheets/sheet2.xml"/></Relationships>',
+    'xl/worksheets/sheet1.xml': '<?xml version="1.0"?><worksheet><sheetData><row r="1"><c r="A1"><v>H</v></c></row><row r="2"><c r="A2"><v>1</v></c></row></sheetData></worksheet>',
+    'xl/worksheets/sheet2.xml': '<?xml version="1.0"?><worksheet><sheetData><row r="1"><c r="A1"><v>Rachunek</v></c></row><row r="2"><c r="A2"><v>PL1</v></c></row></sheetData></worksheet>'
+  });
+  const wb = await C.readXlsxWorkbook(multi);
+  deep(wb.sheetOrder, ['Raporter', 'STIR'], 'xlsx kolejność arkuszy');
+  eq(wb.sheets.Raporter[1][0], '1', 'xlsx Raporter wiersz 2');
+  eq(wb.sheets.STIR[1][0], 'PL1', 'xlsx STIR wiersz 2');
 
   console.log('\nPassed: ' + passed + '  Failed: ' + failed);
   if (failed) process.exit(1);

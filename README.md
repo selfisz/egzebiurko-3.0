@@ -16,7 +16,7 @@ egzebiurko-3.0/
 ├── app.js
 ├── arkusz.js
 ├── ognivo.js
-├── automaty-core.js / automaty.js   ← sito zrzutni (JPK / OGNIVO / AUM) w Analityce WRO
+├── automaty-core.js / automaty.js   ← zrzutnia + składanie bazy WRO z teczek
 ├── wro.js
 ├── zobowiazani.js
 ├── akumulator.js / rozliczenia.js / przelew.js / balanser.js
@@ -57,7 +57,7 @@ Otwórz `index.html` dwuklikiem. Potem:
 
 | Moduł | Plik |
 |-------|------|
-| Analityka WRO | baza `.js` z makra **albo** folder zrzutni (SEE.11, SEE.18, AUM, Platforma, OGNIVO) + przycisk JPK / OGNIVO / AUM |
+| Analityka WRO | folder teczek (setki `.xlsx` / `.xlsm`) → **Zbuduj bazę WRO**; folder zrzutni → JPK/OGNIVO/AUM; albo gotowy `baza_danych.js` |
 | OGNIVO | odpowiedzi banków `.xml` |
 | Szafka teczek | baza `.json` / `.js` (przycisk **Wczytaj JSON**) albo dane z Arkusza |
 | Wklepywator Excel (zakładka 1) | generator wierszy Excela + lista zbiorcza / Ctrl+V z programu A |
