@@ -964,39 +964,113 @@ const ZobowiazaniModule = (() => {
     return (cepik && cepik.hasVehicles) ? cepik : null;
   }
 
-  function renderMajatekHtml(info) {
+  function fmtDatePl(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return String(iso).slice(0, 10);
+    return String(d.getDate()).padStart(2, '0') + '.' + String(d.getMonth() + 1).padStart(2, '0') + '.' + d.getFullYear();
+  }
+
+  function wroRowPreview(headers, row) {
+    const idx = (headers || []).findIndex(h => /bank|nazwa|adres|nieruch|rachun|iban|marka|vin|kwota|opis|kw\b/i.test(String(h || '')));
+    const useIdx = idx >= 0 ? idx : 0;
+    return String(row[useIdx] || row[0] || '').trim() || (headers[0] ? String(headers[0]) : 'wpis');
+  }
+
+  function renderMajatekHtml(info, row) {
     const hasWro = typeof WroModule !== 'undefined';
-    const summary = (hasWro && WroModule.getAssetSummaryForPerson)
-      ? WroModule.getAssetSummaryForPerson(info.pesel, info.nip, info.name)
-      : null;
-    if (!hasWro || !WroModule.getBazaDanych || !Object.keys(WroModule.getBazaDanych() || {}).length) {
+    const pk = String(info.pesel || info.nip || '').replace(/\D/g, '');
+    const suspended = row ? isSuspendedRow(row) : false;
+
+    if (!hasWro || !pk || !WroModule.getMajatekSnapshot) {
       return `<div class="zob-sheet" style="border-style:dashed">
         <div class="zob-sheet-title"><span>Majątek z WRO</span></div>
-        <p class="zob-mod-sub" style="margin:0">Najpierw wczytaj bazę w Analityce WRO — tu pojawi się skrót (OGNIVO, AUM, KW, STIR…).</p>
+        <p class="zob-mod-sub" style="margin:0">Brak PESEL/NIP lub modułu WRO — nie można dopasować danych majątkowych.</p>
+      </div>`;
+    }
+
+    const snap = WroModule.getMajatekSnapshot(pk);
+    if (!snap || !snap.sections || !Object.keys(snap.sections).length) {
+      return `<div class="zob-sheet" style="border-style:dashed">
+        <div class="zob-sheet-title"><span>Majątek z WRO</span></div>
+        <p class="zob-mod-sub" style="margin:0">Brak zsynchronizowanych danych dla tej osoby. Wgraj plik i kliknij <strong>„Synchronizuj z Szafką”</strong> w Analityce WRO.</p>
         <button class="zob-action-btn" style="align-self:flex-start;margin-top:8px" onclick="Router.navigate('wro')">Otwórz Analitykę WRO</button>
       </div>`;
     }
-    if (!summary || !summary.found) {
-      return `<div class="zob-sheet" style="border-style:dashed">
-        <div class="zob-sheet-title"><span>Majątek z WRO</span></div>
-        <p class="zob-mod-sub" style="margin:0">Brak tej osoby w wczytanej bazie WRO.</p>
-        <button class="zob-action-btn" style="align-self:flex-start;margin-top:8px" onclick="ZobowiazaniModule.openWro('${escapeHtml(info.pesel || '')}','${escapeHtml(info.nip || '')}','')">Szukaj w WRO</button>
-      </div>`;
-    }
-    const tiles = (summary.items || []).map(it => `
-      <button type="button" class="zob-asset-tile" onclick="ZobowiazaniModule.openWro('${escapeHtml(info.pesel || '')}','${escapeHtml(info.nip || '')}','${escapeHtml(it.section || '')}')">
-        <div class="zob-asset-ico">${it.icon || '📄'}</div>
-        <div class="zob-asset-body">
-          <div class="zob-asset-title">${escapeHtml(it.label)} <span class="zob-asset-n">${it.count}</span></div>
-          <div class="zob-asset-line">${escapeHtml(it.line || 'Kliknij, aby otworzyć w Analityce WRO')}</div>
+
+    const catalog = WroModule.getSourceCatalog ? WroModule.getSourceCatalog() : [];
+    const order = catalog.length ? catalog.map(c => c.key) : Object.keys(snap.sections);
+    const sectionKeys = Object.keys(snap.sections).sort((a, b) => {
+      const ia = order.indexOf(a), ib = order.indexOf(b);
+      return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib);
+    });
+
+    const dochodBadge = snap.dochodMax > 0
+      ? `<span class="zob-asset-n" style="background:rgba(154,107,47,.15);color:#9a6b2f">💰 max dochód: ${snap.dochodMax.toLocaleString('pl-PL')} zł</span>`
+      : '';
+
+    const blocks = sectionKeys.map(secKey => {
+      const sec = snap.sections[secKey];
+      const iconMeta = catalog.find(c => c.key === secKey);
+      const icon = iconMeta ? iconMeta.icon : '📄';
+      const label = iconMeta ? iconMeta.label : secKey.replace('Wynik: ', '');
+      const isAction = secKey.startsWith('Wynik:');
+      const safe = secKey.replace(/[^a-zA-Z0-9]/g, '');
+      const headers = sec.headers || [];
+      const rows = sec.rows || [];
+
+      if (!isAction) {
+        const preview = rows.slice(0, 3).map(r => escapeHtml(wroRowPreview(headers, r))).join(' · ');
+        return `<div class="zob-sheet" style="border-style:dashed">
+          <div class="zob-sheet-title"><span>${icon} ${escapeHtml(label)} <span class="zob-asset-n">${rows.length}</span></span><span>wrzucono ${fmtDatePl(sec.updatedAt)}</span></div>
+          <p class="zob-mod-sub" style="margin:0">${preview || '—'}</p>
+        </div>`;
+      }
+
+      const todoRows = [], knownRows = [];
+      rows.forEach(r => {
+        const fp = r.slice(0, 5).map(v => String(v || '')).join('||');
+        const ann = WroModule.getAnnotation ? WroModule.getAnnotation(pk, safe, fp) : null;
+        (ann && (ann.status === 'done' || ann.status === 'excluded') ? knownRows : todoRows).push({ r, fp, ann });
+      });
+      const showTodo = !suspended;
+
+      const rowCard = (item, known) => `
+        <div class="wro-card ${item.ann?.status === 'excluded' ? 'wro-card-excl' : item.ann?.status === 'done' ? 'wro-card-done' : ''}" style="margin-bottom:6px">
+          <div class="wro-card-hdr">
+            <span>${escapeHtml(wroRowPreview(headers, item.r))}</span>
+            ${known
+              ? `<button class="wro-annot-btn" style="background:#e2e8f0;color:#475569" onclick="ZobowiazaniModule.markWroItem('${pk}','${safe}','${encodeURIComponent(item.fp)}',null)">↩️ Wróć do „do zajęcia”</button>`
+              : `<span style="display:flex;gap:4px">
+                  <button class="wro-annot-btn" style="background:#dcfce7;color:#166534" onclick="ZobowiazaniModule.markWroItem('${pk}','${safe}','${encodeURIComponent(item.fp)}','done')">✅ Zrobione</button>
+                  <button class="wro-annot-btn" style="background:#fee2e2;color:#991b1b" onclick="ZobowiazaniModule.markWroItem('${pk}','${safe}','${encodeURIComponent(item.fp)}','excluded')">⛔ Wyklucz</button>
+                </span>`}
+          </div>
+        </div>`;
+
+      const bid = 'zwk' + Math.random().toString(36).slice(2, 8);
+      return `<div class="zob-sheet">
+        <div class="zob-sheet-title">
+          <span>${icon} ${escapeHtml(label)} <span class="zob-asset-n">${rows.length}</span>${suspended ? ' <span class="zob-asset-n" style="background:rgba(122,85,36,.18);color:#7a5524">⏸ zawieszona — bez alertów</span>' : ''}</span>
+          <span>wrzucono ${fmtDatePl(sec.updatedAt)}</span>
         </div>
-        <span class="zob-asset-go">WRO →</span>
-      </button>
-    `).join('');
-    return `<div class="zob-sheet">
-      <div class="zob-sheet-title"><span>Majątek z WRO</span><span>Kliknij kafelek → Analityka WRO</span></div>
-      <div class="zob-asset-list">${tiles || '<p class="zob-mod-sub">Są dane osoby, ale bez sekcji majątku.</p>'}</div>
-    </div>`;
+        ${showTodo ? todoRows.map(it => rowCard(it, false)).join('') : ''}
+        ${!showTodo && todoRows.length ? `<p class="zob-mod-sub" style="margin:0">${todoRows.length} wpis(ów) bez decyzji — sprawa zawieszona, nie wyświetlane jako nowość.</p>` : ''}
+        ${todoRows.length === 0 && knownRows.length > 0 ? '<p class="zob-mod-sub" style="margin:0">✅ Wszystkie wpisy oznaczone</p>' : ''}
+        ${knownRows.length > 0 ? `
+          <div class="wro-known-toggle" onclick="(function(el){const g=el.nextElementSibling;g.classList.toggle('wro-known-hidden');el.classList.toggle('expanded');el.querySelector('.wro-known-arrow').textContent=g.classList.contains('wro-known-hidden')?'▶':'▼'})(this)">
+            <span>👁 Pokaż znane (${knownRows.length})</span><span class="wro-known-arrow">▶</span>
+          </div>
+          <div class="wro-known-hidden" id="${bid}">${knownRows.map(it => rowCard(it, true)).join('')}</div>
+        ` : ''}
+      </div>`;
+    }).join('');
+
+    return `<div class="zob-sheet" style="margin-bottom:0">
+        <div class="zob-sheet-title"><span>Majątek z WRO</span><span>ost. synchronizacja: ${fmtDatePl(snap.lastSyncAt)}</span></div>
+        ${dochodBadge ? `<div>${dochodBadge}</div>` : ''}
+      </div>
+      ${blocks}`;
   }
 
   function openWroForPerson(pesel, nip, section) {
@@ -1196,6 +1270,15 @@ const ZobowiazaniModule = (() => {
       });
     } else if (activeFilter === 'has_cepik') {
       rowsWithIndex = rowsWithIndex.filter(item => !!getCepikForPerson(item.info));
+    } else if (activeFilter === 'wro_new') {
+      rowsWithIndex = rowsWithIndex.filter(item => {
+        return typeof WroModule !== 'undefined' && WroModule.hasPendingItemsForKey && WroModule.hasPendingItemsForKey(item.key);
+      });
+    } else if (activeFilter.startsWith('src:')) {
+      const secKey = activeFilter.slice(4);
+      rowsWithIndex = rowsWithIndex.filter(item => {
+        return typeof WroModule !== 'undefined' && WroModule.personHasSection && WroModule.personHasSection(item.key, secKey);
+      });
     } else if (activeFilter.startsWith('no_')) {
       const sysName = activeFilter.replace('no_', '').toUpperCase();
       const sysIdx = dbSheet.columns.indexOf(sysName);
@@ -1273,7 +1356,7 @@ const ZobowiazaniModule = (() => {
 
   function computeFilterCounts() {
     if (!dbSheet || !dbSheet.rows) return { all: 0, todo: 0, progress: 0, complete: 0, cepik: 0, deferred: 0, due: 0 };
-    let todo = 0, progress = 0, complete = 0, cepikCount = 0, deferred = 0, due = 0;
+    let todo = 0, progress = 0, complete = 0, cepikCount = 0, deferred = 0, due = 0, wroNew = 0;
     let scoped = 0;
     dbSheet.rows.forEach(r => {
       const key = personKeyFromRow(r);
@@ -1297,8 +1380,23 @@ const ZobowiazaniModule = (() => {
         deferred++;
         if (def.due) due++;
       }
+
+      if (!archived && !isSuspendedRow(r) && typeof WroModule !== 'undefined' && WroModule.hasPendingItemsForKey && WroModule.hasPendingItemsForKey(key)) {
+        wroNew++;
+      }
     });
-    return { all: scoped, todo, progress, complete, cepik: cepikCount, deferred, due };
+    return { all: scoped, todo, progress, complete, cepik: cepikCount, deferred, due, wroNew };
+  }
+
+  function renderSourceChipsHtml() {
+    if (typeof WroModule === 'undefined' || !WroModule.getSourceCatalog) return '';
+    const catalog = WroModule.getSourceCatalog();
+    if (!catalog.length) return '';
+    const chips = catalog.map(c => {
+      const filterKey = 'src:' + c.key;
+      return `<button class="zob-pill ${activeFilter === filterKey ? 'active' : ''}" onclick="ZobowiazaniModule.setFilter('${filterKey}')" title="Pokaż teczki z danymi ${escapeHtml(c.label)}">${c.icon} ${escapeHtml(c.label)}</button>`;
+    }).join('');
+    return `<div class="zob-pills" id="zob-src-chips" style="margin-top:2px"><span class="zob-section-hint" style="text-transform:none;font-size:.7rem;opacity:.7;margin-right:2px">Źródło WRO:</span>${chips}</div>`;
   }
 
   /* ─── RENDEROWANIE GŁÓWNEGO WIDOKU ─────────────────────── */
@@ -1402,6 +1500,11 @@ const ZobowiazaniModule = (() => {
               <button class="zob-pill pill-warn ${activeFilter === 'due' ? 'active' : ''}" onclick="ZobowiazaniModule.setFilter('due')">
                 Do powrotu <span class="zob-pill-count">${counts.due}</span>
               </button>
+              ${counts.wroNew > 0 ? `
+                <button class="zob-pill pill-danger ${activeFilter === 'wro_new' ? 'active' : ''}" onclick="ZobowiazaniModule.setFilter('wro_new')" title="Osoby z niezałatwionymi pozycjami z ostatniej synchronizacji WRO (bez zawieszonych)">
+                  🔥 Nowość WRO <span class="zob-pill-count">${counts.wroNew}</span>
+                </button>
+              ` : ''}
               ${freshKeys.size ? `
                 <button class="zob-pill pill-ok ${activeFilter === 'fresh' ? 'active' : ''}" onclick="ZobowiazaniModule.setFilter('fresh')" id="zob-fresh-pill">
                   Nowe <span class="zob-pill-count">${freshKeys.size}</span>
@@ -1419,6 +1522,7 @@ const ZobowiazaniModule = (() => {
               <button class="zob-pill ${activeFilter === 'no_jpk' ? 'active' : ''}" onclick="ZobowiazaniModule.setFilter('no_jpk')">Brak JPK</button>
               <button class="zob-pill ${activeFilter === 'no_infz' ? 'active' : ''}" onclick="ZobowiazaniModule.setFilter('no_infz')">Brak INFZ</button>
             </div>
+            ${renderSourceChipsHtml()}
           </div>
 
           <div class="zob-split-container mode-${viewMode}" id="zob-split">
@@ -1997,7 +2101,7 @@ const ZobowiazaniModule = (() => {
         `;
       }
     } else if (detailTab === 'majatek') {
-      bodyHtml = renderMajatekHtml(info);
+      bodyHtml = renderMajatekHtml(info, r);
     } else {
       bodyHtml = `
         <div class="zob-sheet">
@@ -2342,6 +2446,41 @@ const ZobowiazaniModule = (() => {
     renderViews();
   }
 
+  function isSuspended(key) {
+    const pk = String(key || '').replace(/\D/g, '') || String(key || '');
+    if (!pk || !dbSheet) return false;
+    const hit = lookupById(pk);
+    if (!hit || !dbSheet.rows[hit.rowIndex]) return false;
+    return isSuspendedRow(dbSheet.rows[hit.rowIndex]);
+  }
+
+  function archiveByKey(key, meta) {
+    const hit = lookupById(key);
+    if (!hit || !dbSheet || !dbSheet.rows[hit.rowIndex]) return false;
+    const info = extractPersonInfo(dbSheet.rows[hit.rowIndex]);
+    const pk = personKeyFromInfo(info);
+    if (isArchived(pk)) return true;
+    archiveMap[pk] = {
+      at: (meta && meta.at) || new Date().toISOString(),
+      name: info.name || '',
+      reason: (meta && meta.reason) || 'WRO: zniknęły dane',
+    };
+    closeTab(pk);
+    persistArchive();
+    invalidateListCache();
+    if (activated) renderViews();
+    if (typeof showToast === 'function') showToast('Teczka "' + (info.name || pk) + '" → Archiwum', 'info', 2500);
+    return true;
+  }
+
+  function markWroItem(personKey, sectionSafe, fingerprint, status) {
+    if (typeof WroModule === 'undefined' || !WroModule.setAnnotationData) return;
+    WroModule.setAnnotationData(personKey, sectionSafe, fingerprint, status ? { status } : null);
+    invalidateListCache();
+    renderDetailOnly();
+    updatePillsBar();
+  }
+
   function applyArchiveIds(ids, meta, opts) {
     const list = Array.isArray(ids) ? ids : [];
     list.forEach(id => {
@@ -2642,6 +2781,11 @@ const ZobowiazaniModule = (() => {
     archivePerson,
     applyArchiveIds,
     afterExcelRefresh,
+    isSuspended,
+    archiveByKey,
+    markWroItem,
+    invalidateListCache,
+    refreshAfterWroSync() { invalidateListCache(); if (activated) renderViews(); },
     openRowMenu,
     openTabMenu,
     syncCepik: syncCepikForPerson,

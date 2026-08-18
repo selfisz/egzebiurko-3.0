@@ -22,6 +22,265 @@ const WroModule = (() => {
   let _wroFiltered = [];
   let _wroVirtRaf = 0;
 
+  /* ─── SYNCHRONIZACJA Z SZAFKĄ (majątek per teczka) ─────── */
+  const MAJATEK_KEY = 'egze3_majatek_sync';
+
+  function loadMajatekStore() {
+    try {
+      const raw = localStorage.getItem(MAJATEK_KEY);
+      const v = raw ? JSON.parse(raw) : null;
+      if (v && typeof v === 'object') {
+        if (!v.people || typeof v.people !== 'object') v.people = {};
+        if (!Array.isArray(v.pendingGone)) v.pendingGone = [];
+        return v;
+      }
+    } catch {}
+    return { people: {}, pendingGone: [] };
+  }
+  function saveMajatekStore(store) {
+    try { localStorage.setItem(MAJATEK_KEY, JSON.stringify(store)); }
+    catch (e) { console.warn('[WRO] zapis majątku nie powiódł się (za duży?)', e); }
+  }
+  function todayIsoWro() {
+    return new Date().toISOString().slice(0, 10);
+  }
+  function personKeyForEntity(id) {
+    const data = bazaDanych[id] || {};
+    const meta = data._meta || {};
+    const fromT = idsFromWroTables(data);
+    const a3 = digitsId(meta.a3) || digitsId(fromT.nip);
+    const b3 = digitsId(meta.b3) || digitsId(fromT.pesel);
+    return b3 || a3 || digitsId(id) || null;
+  }
+  function computeMaxDochodFromRows(headers, rows) {
+    const hLower = (headers || []).map(h => String(h || '').toLowerCase());
+    const dochIdx = hLower.findIndex(h => /doch[oó]d|income/i.test(h));
+    let max = 0;
+    (rows || []).forEach(r => {
+      let val = 0;
+      if (dochIdx >= 0) val = parsePolishNum(r[dochIdx]);
+      else val = (r || []).slice(1).map(v => parsePolishNum(v)).filter(n => n > 0 && n < 100000000).reduce((a, b) => Math.max(a, b), 0);
+      if (val > max) max = val;
+    });
+    return max;
+  }
+  function entitySectionsSnapshot(id) {
+    const data = bazaDanych[id] || {};
+    const out = {};
+    Object.keys(data).forEach(k => {
+      if (k === '_meta') return;
+      const rows = data[k];
+      if (!Array.isArray(rows) || rows.length <= 1) return;
+      out[k] = { updatedAt: todayIsoWro(), headers: rows[0], rows: rows.slice(1) };
+    });
+    return out;
+  }
+  function sectionsHavePending(personKey, sections, entityId) {
+    const annots = loadAnnotations();
+    for (const src of Object.keys(sections)) {
+      if (!src.startsWith('Wynik:')) continue;
+      const safe = src.replace(/[^a-zA-Z0-9]/g, '');
+      for (const row of (sections[src].rows || [])) {
+        const fp = row.slice(0, 5).map(v => String(v || '')).join('||');
+        const ann = annots[buildAnnotKey(personKey, safe, fp)];
+        if (!ann || (ann.status !== 'done' && ann.status !== 'excluded')) return true;
+      }
+    }
+    try {
+      const ognivoData = SharedStore.get(SharedStore.KEYS.OGNIVO, {});
+      const entry = ognivoData[entityId] || ognivoData[personKey];
+      if (entry && Array.isArray(entry.banks)) {
+        for (const b of entry.banks) {
+          const ann = annots[buildAnnotKey(personKey, 'OGNIVOStore', b)];
+          if (!ann || (ann.status !== 'done' && ann.status !== 'excluded')) return true;
+        }
+      }
+    } catch {}
+    return false;
+  }
+
+  function getMajatekSnapshot(personKey) {
+    const pk = digitsId(personKey);
+    if (!pk) return null;
+    return loadMajatekStore().people[pk] || null;
+  }
+  function personHasSection(personKey, sectionKey) {
+    const snap = getMajatekSnapshot(personKey);
+    return !!(snap && snap.sections && snap.sections[sectionKey]);
+  }
+  function hasPendingItemsForKey(personKey) {
+    const pk = digitsId(personKey);
+    if (!pk) return false;
+    if (typeof ZobowiazaniModule !== 'undefined' && typeof ZobowiazaniModule.isSuspended === 'function' && ZobowiazaniModule.isSuspended(pk)) {
+      return false;
+    }
+    const snap = getMajatekSnapshot(pk);
+    if (!snap || !snap.sections) return false;
+    return sectionsHavePending(pk, snap.sections, snap.entityId);
+  }
+  function getPendingGoneCount() {
+    return loadMajatekStore().pendingGone.length;
+  }
+  function getSourceCatalog() {
+    return matrixColumns.map(k => ({ key: k, icon: icons[k] || '📄', safe: k.replace(/[^a-zA-Z0-9]/g, ''), label: k.replace('Wynik: ', '') }));
+  }
+
+  function syncToSzafka() {
+    if (!Object.keys(bazaDanych).length) {
+      if (typeof showToast === 'function') showToast('Najpierw wczytaj plik bazy WRO', 'info', 2500);
+      return;
+    }
+    if (typeof ZobowiazaniModule === 'undefined' || typeof ZobowiazaniModule.getIdIndex !== 'function') {
+      if (typeof showToast === 'function') showToast('Szafka teczek niedostępna — otwórz najpierw kartę Zobowiązani', 'error', 3000);
+      return;
+    }
+    const idIndex = ZobowiazaniModule.getIdIndex();
+    const store = loadMajatekStore();
+    let addedN = 0, updatedN = 0, newsN = 0;
+    const missingList = [];
+
+    entities.forEach(({ id }) => {
+      const pk = personKeyForEntity(id);
+      const hit = pk ? idIndex[pk] : null;
+      if (!hit) {
+        missingList.push({ id, name: resolveEntityView(id, idIndex).displayName });
+        return;
+      }
+      const prev = store.people[pk];
+      const sections = entitySectionsSnapshot(id);
+
+      if (prev && prev.sections) {
+        Object.keys(prev.sections).forEach(secKey => {
+          if (!sections[secKey]) {
+            const dup = store.pendingGone.find(g => g.personKey === pk && g.section === secKey);
+            if (!dup) {
+              store.pendingGone.push({
+                personKey: pk,
+                name: hit.name || pk,
+                section: secKey,
+                oldCount: (prev.sections[secKey].rows || []).length,
+                at: new Date().toISOString(),
+              });
+            }
+          }
+        });
+      }
+
+      const dochodMax = sections['Dochody']
+        ? computeMaxDochodFromRows(sections['Dochody'].headers, sections['Dochody'].rows)
+        : (prev ? (prev.dochodMax || 0) : 0);
+
+      store.people[pk] = { entityId: id, lastSyncAt: new Date().toISOString(), sections, dochodMax };
+      if (prev) updatedN++; else addedN++;
+
+      const suspended = typeof ZobowiazaniModule.isSuspended === 'function' && ZobowiazaniModule.isSuspended(pk);
+      if (!suspended && sectionsHavePending(pk, sections, id)) newsN++;
+    });
+
+    saveMajatekStore(store);
+    if (typeof ZobowiazaniModule !== 'undefined' && ZobowiazaniModule.refreshAfterWroSync) ZobowiazaniModule.refreshAfterWroSync();
+    showSyncSummaryDialog({ added: addedN, updated: updatedN, missing: missingList, news: newsN, goneCount: store.pendingGone.length });
+  }
+
+  function showSyncSummaryDialog(summary) {
+    let dlg = document.getElementById('wro-sync-dlg');
+    if (!dlg) {
+      dlg = document.createElement('div');
+      dlg.id = 'wro-sync-dlg';
+      document.body.appendChild(dlg);
+    }
+    const missHtml = summary.missing.length
+      ? `<div class="wro-ldlg-note">Bez teczki: ${summary.missing.slice(0, 8).map(m => escWro(m.name)).join(', ')}${summary.missing.length > 8 ? '…' : ''}</div>`
+      : '';
+    dlg.innerHTML = `
+      <div class="wro-ldlg-overlay" onclick="document.getElementById('wro-sync-dlg').style.display='none'">
+        <div class="wro-ldlg-box" onclick="event.stopPropagation()">
+          <div class="wro-ldlg-title">🔄 Synchronizacja z Szafką</div>
+          <div class="wro-ldlg-grid">
+            <div class="wro-ldlg-card wro-ldlg-done"><div class="wro-ldlg-num">${summary.added}</div><div class="wro-ldlg-lbl">✅ dodanych</div></div>
+            <div class="wro-ldlg-card"><div class="wro-ldlg-num">${summary.updated}</div><div class="wro-ldlg-lbl">🔁 zaktualizowanych</div></div>
+            <div class="wro-ldlg-card wro-ldlg-todo"><div class="wro-ldlg-num">${summary.news}</div><div class="wro-ldlg-lbl">🔥 z nowością</div></div>
+            <div class="wro-ldlg-card wro-ldlg-partial"><div class="wro-ldlg-num">${summary.missing.length}</div><div class="wro-ldlg-lbl">📂 brakuje teczki</div></div>
+          </div>
+          ${missHtml}
+          ${summary.goneCount > 0 ? `<div class="wro-ldlg-note wro-ldlg-first">⚠️ ${summary.goneCount} zniknięć do przeglądu — dane, które osoba miała wcześniej, a już ich nie ma w tym raporcie.</div>` : ''}
+          <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
+            ${summary.goneCount > 0 ? `<button class="wro-ldlg-close" style="flex:1;background:#b45309" onclick="document.getElementById('wro-sync-dlg').style.display='none';WroModule.reviewGoneQueue()">Przejrzyj zniknięcia (${summary.goneCount})</button>` : ''}
+            <button class="wro-ldlg-close" style="flex:1" onclick="document.getElementById('wro-sync-dlg').style.display='none'">Zamknij</button>
+          </div>
+        </div>
+      </div>`;
+    dlg.style.display = 'block';
+    refreshSyncButtons();
+  }
+
+  function reviewGoneQueue() {
+    const store = loadMajatekStore();
+    if (!store.pendingGone.length) {
+      if (typeof showToast === 'function') showToast('Brak zniknięć do przeglądu', 'info', 2200);
+      return;
+    }
+    renderGoneReview();
+  }
+
+  function renderGoneReview() {
+    const store = loadMajatekStore();
+    let dlg = document.getElementById('wro-gone-dlg');
+    if (!dlg) {
+      dlg = document.createElement('div');
+      dlg.id = 'wro-gone-dlg';
+      document.body.appendChild(dlg);
+    }
+    if (!store.pendingGone.length) {
+      dlg.style.display = 'none';
+      if (typeof showToast === 'function') showToast('Przegląd zniknięć zakończony', 'success', 2200);
+      refreshSyncButtons();
+      return;
+    }
+    const total = store.pendingGone.length;
+    const item = store.pendingGone[0];
+    dlg.innerHTML = `
+      <div class="wro-ldlg-overlay">
+        <div class="wro-ldlg-box" style="max-width:440px">
+          <div class="wro-ldlg-title">⚠️ Zniknięcie danych (1/${total})</div>
+          <p style="margin:0 0 14px;color:var(--text);font-size:.92rem">
+            <strong>${escWro(item.name)}</strong> miał(a) wcześniej dane w sekcji <strong>${escWro(item.section.replace('Wynik: ', ''))}</strong>
+            (${item.oldCount} wpis${item.oldCount === 1 ? '' : 'ów'}), a w nowym raporcie już ich nie ma.
+          </p>
+          <p style="margin:0 0 16px;color:var(--muted);font-size:.82rem">Zamknąć sprawę i przenieść teczkę do Archiwum, czy zostawić otwartą?</p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="wro-ldlg-close" style="flex:1;background:#b91c1c" onclick="WroModule.goneDecision('archive')">📦 Archiwizuj teczkę</button>
+            <button class="wro-ldlg-close" style="flex:1;background:#16a34a" onclick="WroModule.goneDecision('leave')">✅ Zostaw otwartą</button>
+          </div>
+          <button class="wro-ldlg-close" style="width:100%;margin-top:8px;background:var(--panel2);color:var(--text);border:1px solid var(--line)" onclick="document.getElementById('wro-gone-dlg').style.display='none'">Przerwij przegląd (dokończę później)</button>
+        </div>
+      </div>`;
+    dlg.style.display = 'block';
+  }
+
+  function goneDecision(decision) {
+    const store = loadMajatekStore();
+    const item = store.pendingGone[0];
+    if (item) {
+      if (decision === 'archive' && typeof ZobowiazaniModule !== 'undefined' && typeof ZobowiazaniModule.archiveByKey === 'function') {
+        ZobowiazaniModule.archiveByKey(item.personKey, { reason: 'WRO: zniknęły dane (' + item.section.replace('Wynik: ', '') + ')' });
+      }
+      store.pendingGone.shift();
+      saveMajatekStore(store);
+      if (typeof ZobowiazaniModule !== 'undefined' && ZobowiazaniModule.refreshAfterWroSync) ZobowiazaniModule.refreshAfterWroSync();
+    }
+    renderGoneReview();
+  }
+
+  function refreshSyncButtons() {
+    const btn = document.getElementById('wro-gone-btn');
+    if (!btn) return;
+    const n = getPendingGoneCount();
+    btn.style.display = n > 0 ? '' : 'none';
+    const num = btn.querySelector('.wro-cart-counter');
+    if (num) num.textContent = n;
+  }
+
   const icons = {
     "Raporter":"📊","STIR":"🏦","Księgi Wieczyste":"🏢",
     "CRCM":"📋","Dochody":"💰","Przychód":"📈",
@@ -136,6 +395,14 @@ const WroModule = (() => {
               <input type="file" id="wro-file-input" accept=".js,.json,.txt" style="display:none">
             </label>
 
+            <button class="wro-cart-btn" style="background:#0f766e" onclick="WroModule.syncToSzafka()" title="Wgrane dane nie trafiają do Szafki automatycznie — dopiero po kliknięciu tutaj">
+              🔄 Synchronizuj z Szafką
+            </button>
+            <button class="wro-cart-btn" id="wro-gone-btn" style="background:#b45309;display:none" onclick="WroModule.reviewGoneQueue()">
+              ⚠️ Przegląd zniknięć
+              <span class="wro-cart-counter">0</span>
+            </button>
+
             <div class="wro-progress-row">
               <button class="wro-prog-btn" onclick="WroModule.exportProgress()">💾 Zapisz postęp</button>
               <label class="wro-prog-btn">
@@ -189,6 +456,7 @@ const WroModule = (() => {
     bindEvents();
     initFilters();
     if (entities.length > 0) renderList('');
+    refreshSyncButtons();
   }
 
   function bindEvents() {
@@ -1327,7 +1595,11 @@ const WroModule = (() => {
     getCepikInfoForId, getAssetSummaryForPerson, findEntityKey,
     getBazaDanych, importBazaDanych, openInSzafka,
     openAnnotPopover, showAnnotExcludeForm, setAnnotStatus,
-    setMinDochod
+    setMinDochod,
+    syncToSzafka, reviewGoneQueue, goneDecision,
+    getAnnotation, setAnnotationData,
+    getMajatekSnapshot, personHasSection, hasPendingItemsForKey,
+    getPendingGoneCount, getSourceCatalog,
   };
 })();
 
