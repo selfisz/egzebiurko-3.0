@@ -963,32 +963,24 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
 .zob-pill.active .zob-pill-count{background:rgba(255,255,255,.22)}
 .zob-pill-sep{color:var(--zob-edge); margin:0 2px}
 
-.zob-dochod-filter{
-  margin-top:8px; padding:8px 10px 9px; border-top:1px dashed var(--zob-edge);
-  display:flex; flex-wrap:wrap; align-items:center; gap:8px 12px;
+.zob-src-icos{
+  display:flex; flex-wrap:wrap; align-items:center; gap:4px;
+  margin-top:6px; padding-top:6px; border-top:1px dashed var(--zob-edge);
 }
-.zob-dochod-label{
-  font-size:.7rem; font-weight:700; color:var(--zob-ink-soft); text-transform:uppercase;
-  letter-spacing:.04em; flex-shrink:0;
+.zob-src-ico{
+  width:30px; height:30px; padding:0; border-radius:8px; cursor:pointer; font-size:1rem;
+  border:1px solid var(--zob-edge); background:var(--zob-cream); color:var(--zob-ink);
+  display:inline-flex; align-items:center; justify-content:center; line-height:1;
 }
-.zob-dochod-row{display:flex; gap:5px; align-items:center}
-.zob-dochod-inp{
-  width:130px; background:var(--zob-cream); border:1px solid var(--zob-edge); border-radius:7px;
-  padding:5px 9px; font:inherit; font-size:.8rem; color:var(--zob-ink);
+.zob-src-ico:hover{background:#fff; border-color:var(--zob-spine)}
+.zob-src-ico.active{background:var(--zob-ink); border-color:var(--zob-ink); color:#fff}
+
+.zob-wro-icos{display:flex; flex-wrap:wrap; gap:3px; margin-top:4px; line-height:1}
+.zob-wro-ico{font-size:.78rem; opacity:.8; line-height:1}
+.zob-wro-ico.is-high{
+  opacity:1; background:#fefce8; border-radius:4px; padding:0 2px;
+  box-shadow:0 0 0 1px #fde68a; filter:saturate(1.25) brightness(1.15);
 }
-.zob-dochod-inp:focus{outline:none; border-color:var(--zob-spine)}
-.zob-dochod-clear{
-  background:var(--zob-cream); border:1px solid var(--zob-edge); border-radius:7px;
-  color:var(--zob-ink-soft); padding:4px 9px; cursor:pointer; font:inherit; font-size:.8rem;
-}
-.zob-dochod-clear:hover{background:#fff; border-color:var(--zob-spine); color:var(--zob-spine)}
-.zob-dochod-presets{display:flex; gap:4px}
-.zob-dochod-presets button{
-  background:var(--zob-cream); border:1px solid var(--zob-edge); border-radius:6px;
-  color:var(--zob-ink-soft); font:inherit; font-size:.74rem; font-weight:650; padding:4px 9px; cursor:pointer;
-}
-.zob-dochod-presets button:hover{background:#fff; border-color:var(--zob-spine); color:var(--zob-ink)}
-.zob-dochod-presets button.active{background:var(--zob-ink); border-color:var(--zob-ink); color:var(--zob-cream)}
 
 /* Split: lista jak Arkusz + otwarta teczka */
 .zob-split-container{flex:1; min-height:0; display:flex; gap:14px; overflow:hidden}
@@ -1127,24 +1119,32 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
 }
 
 .zob-ctx{
-  position:fixed; z-index:80; min-width:200px; max-width:min(280px,92vw);
-  background:var(--zob-cream); color:var(--zob-ink);
-  border:1px solid var(--zob-edge); border-radius:10px;
-  box-shadow:0 12px 32px rgba(26,35,50,.18); padding:6px; display:none;
+  position:fixed; z-index:20000; min-width:200px; max-width:min(280px,92vw);
+  background:#faf6f0; color:#1a2332;
+  border:1px solid #d9cfc2; border-radius:10px;
+  box-shadow:0 12px 32px rgba(26,35,50,.22); padding:6px; display:none;
+  opacity:1; isolation:isolate;
 }
 .zob-ctx.open{display:block}
 .zob-ctx .zob-ctx-h{
-  font-size:.7rem; color:var(--zob-ink-soft); padding:4px 10px 6px; font-weight:700;
+  font-size:.7rem; color:#6b6258; padding:4px 10px 6px; font-weight:700;
   text-transform:uppercase; letter-spacing:.04em;
   max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
 }
 .zob-ctx button{
-  width:100%; text-align:left; border:0; background:transparent; color:var(--zob-ink);
+  width:100%; text-align:left; border:0; background:transparent; color:#1a2332;
   padding:8px 10px; border-radius:8px; font:inherit; font-size:.82rem; cursor:pointer;
 }
-.zob-ctx button:hover{background:color-mix(in srgb, var(--zob-paper2) 80%, #fff)}
-.zob-ctx button.danger{color:var(--zob-spine)}
-.zob-ctx .zob-ctx-sep{height:1px; background:var(--zob-edge); margin:4px 0}
+.zob-ctx button:hover{background:#ebe1d4}
+.zob-ctx button.danger{color:#8b3a3a}
+.zob-ctx .zob-ctx-sep{height:1px; background:#d9cfc2; margin:4px 0}
+[data-mode="dark"] .zob-ctx{
+  background:#1c1915; color:#e8e2d8; border-color:#3a342c;
+}
+[data-mode="dark"] .zob-ctx .zob-ctx-h{color:#a89f92}
+[data-mode="dark"] .zob-ctx button{color:#e8e2d8}
+[data-mode="dark"] .zob-ctx button:hover{background:#252019}
+[data-mode="dark"] .zob-ctx .zob-ctx-sep{background:#3a342c}
 
 .zob-drawer{
   width:min(520px, 52%); flex-shrink:0; display:flex; flex-direction:column;
@@ -1177,7 +1177,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
   width:100%; box-sizing:border-box; text-align:left;
   padding:9px 12px; border:0; border-bottom:1px solid var(--zob-edge);
   background:transparent; color:var(--zob-ink); cursor:pointer; font:inherit;
-  min-height:52px;
+  min-height:70px;
 }
 .zob-person-row:nth-child(even){background:color-mix(in srgb, var(--zob-paper) 55%, transparent)}
 .zob-person-row:hover{background:color-mix(in srgb, var(--zob-paper2) 80%, #fff)}
@@ -1309,10 +1309,11 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
 .zob-defer-actions{display:flex; flex-wrap:wrap; gap:6px; align-items:center}
 .zob-defer-note{font-size:.72rem; color:var(--zob-ink-soft); margin:0; line-height:1.35}
 .zob-defer-pop{
-  position:fixed; z-index:90; min-width:220px; max-width:min(300px,92vw);
-  background:var(--zob-cream); color:var(--zob-ink);
-  border:1px solid var(--zob-edge); border-radius:12px;
-  box-shadow:0 14px 36px rgba(26,35,50,.2); padding:10px;
+  position:fixed; z-index:20001; min-width:220px; max-width:min(300px,92vw);
+  background:#faf6f0; color:#1a2332;
+  border:1px solid #d9cfc2; border-radius:12px;
+  box-shadow:0 14px 36px rgba(26,35,50,.22); padding:10px;
+  opacity:1; isolation:isolate;
 }
 .zob-defer-pop .zob-defer-pop-h{
   font-size:.7rem; font-weight:700; text-transform:uppercase; letter-spacing:.04em;
