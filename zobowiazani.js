@@ -49,6 +49,7 @@ const ZobowiazaniModule = (() => {
   let _personColCache = { sheet: null, len: -1, map: null };
   let _virtBound = false;
   let _virtRaf = 0;
+  let minDochodFilter = 0;
   restoreOpenTabs();
 
   function invalidateListCache() {
@@ -1225,6 +1226,7 @@ const ZobowiazaniModule = (() => {
       Object.keys(archiveMap).length,
       deskPins.length,
       freshKeys.size,
+      minDochodFilter,
     ].join('|');
     if (_filterCache.key === cacheKey && _filterCache.rows) return _filterCache.rows;
 
@@ -1248,6 +1250,10 @@ const ZobowiazaniModule = (() => {
       rowsWithIndex = rowsWithIndex.filter(item => {
         return item.row.some(cell => String(cell || '').toLowerCase().includes(query));
       });
+    }
+
+    if (minDochodFilter > 0) {
+      rowsWithIndex = rowsWithIndex.filter(item => getDochodMaxForKey(item.key) >= minDochodFilter);
     }
 
     if (activeFilter === 'fresh') {
@@ -1399,6 +1405,39 @@ const ZobowiazaniModule = (() => {
     return `<div class="zob-pills" id="zob-src-chips" style="margin-top:2px"><span class="zob-section-hint" style="text-transform:none;font-size:.7rem;opacity:.7;margin-right:2px">Źródło WRO:</span>${chips}</div>`;
   }
 
+  function renderDochodFilterHtml() {
+    if (typeof WroModule === 'undefined' || !WroModule.getSourceCatalog) return '';
+    return `
+      <div class="zob-dochod-filter">
+        <div class="zob-dochod-label">💰 Min. dochód roczny (PLN) — z Analityki WRO</div>
+        <div class="zob-dochod-row">
+          <input type="number" id="zob-min-dochod" class="zob-dochod-inp" placeholder="np. 60000" min="0" step="1000" value="${minDochodFilter || ''}">
+          <button class="zob-dochod-clear" onclick="ZobowiazaniModule.setMinDochod(0)" title="Wyczyść filtr">✕</button>
+        </div>
+        <div class="zob-dochod-presets">
+          <button class="${minDochodFilter === 30000 ? 'active' : ''}" onclick="ZobowiazaniModule.setMinDochod(30000)">30k</button>
+          <button class="${minDochodFilter === 60000 ? 'active' : ''}" onclick="ZobowiazaniModule.setMinDochod(60000)">60k</button>
+          <button class="${minDochodFilter === 100000 ? 'active' : ''}" onclick="ZobowiazaniModule.setMinDochod(100000)">100k</button>
+          <button class="${minDochodFilter === 200000 ? 'active' : ''}" onclick="ZobowiazaniModule.setMinDochod(200000)">200k</button>
+        </div>
+      </div>
+    `;
+  }
+
+  function setMinDochod(val) {
+    minDochodFilter = parseFloat(val) || 0;
+    invalidateListCache();
+    const inp = document.getElementById('zob-min-dochod');
+    if (inp) inp.value = minDochodFilter || '';
+    renderViews({ keepScroll: true, detail: false, tabs: false });
+  }
+
+  function getDochodMaxForKey(key) {
+    if (typeof WroModule === 'undefined' || !WroModule.getMajatekSnapshot) return 0;
+    const snap = WroModule.getMajatekSnapshot(key);
+    return (snap && snap.dochodMax) || 0;
+  }
+
   /* ─── RENDEROWANIE GŁÓWNEGO WIDOKU ─────────────────────── */
   async function render() {
     const container = document.getElementById('zobowiazani-app');
@@ -1523,6 +1562,7 @@ const ZobowiazaniModule = (() => {
               <button class="zob-pill ${activeFilter === 'no_infz' ? 'active' : ''}" onclick="ZobowiazaniModule.setFilter('no_infz')">Brak INFZ</button>
             </div>
             ${renderSourceChipsHtml()}
+            ${renderDochodFilterHtml()}
           </div>
 
           <div class="zob-split-container mode-${viewMode}" id="zob-split">
@@ -1544,6 +1584,15 @@ const ZobowiazaniModule = (() => {
       if (searchInput) {
         searchInput.addEventListener('input', (e) => {
           filterText = e.target.value;
+          invalidateListCache();
+          renderViews({ keepScroll: true, detail: false, tabs: false });
+        });
+      }
+
+      const dochodInput = document.getElementById('zob-min-dochod');
+      if (dochodInput) {
+        dochodInput.addEventListener('input', (e) => {
+          minDochodFilter = parseFloat(e.target.value) || 0;
           invalidateListCache();
           renderViews({ keepScroll: true, detail: false, tabs: false });
         });
@@ -1657,6 +1706,27 @@ const ZobowiazaniModule = (() => {
     });
   }
 
+  function syncExtraFilterButtons() {
+    const chipsBar = document.getElementById('zob-src-chips');
+    if (chipsBar) {
+      chipsBar.querySelectorAll('button.zob-pill').forEach(btn => {
+        const m = (btn.getAttribute('onclick') || '').match(/setFilter\('([^']+)'\)/);
+        btn.classList.toggle('active', !!m && m[1] === activeFilter);
+      });
+    }
+    const presets = document.querySelector('.zob-dochod-presets');
+    if (presets) {
+      presets.querySelectorAll('button').forEach(btn => {
+        const m = (btn.getAttribute('onclick') || '').match(/setMinDochod\((\d+)\)/);
+        btn.classList.toggle('active', !!m && Number(m[1]) === minDochodFilter);
+      });
+    }
+    const dochodInput = document.getElementById('zob-min-dochod');
+    if (dochodInput && document.activeElement !== dochodInput) {
+      dochodInput.value = minDochodFilter || '';
+    }
+  }
+
   function updatePillsBar() {
     const counts = computeFilterCounts();
     const statsEl = document.getElementById('zob-stats-badge');
@@ -1666,6 +1736,7 @@ const ZobowiazaniModule = (() => {
     }
     const drawerCount = document.getElementById('zob-drawer-count');
     if (drawerCount) drawerCount.textContent = String(visibleRows.length);
+    syncExtraFilterButtons();
     const bar = document.getElementById('zob-pills-bar');
     if (!bar) return;
     let freshBtn = document.getElementById('zob-fresh-pill');
@@ -2784,6 +2855,7 @@ const ZobowiazaniModule = (() => {
     isSuspended,
     archiveByKey,
     markWroItem,
+    setMinDochod,
     invalidateListCache,
     refreshAfterWroSync() { invalidateListCache(); if (activated) renderViews(); },
     openRowMenu,

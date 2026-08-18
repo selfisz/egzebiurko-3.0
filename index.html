@@ -963,6 +963,33 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
 .zob-pill.active .zob-pill-count{background:rgba(255,255,255,.22)}
 .zob-pill-sep{color:var(--zob-edge); margin:0 2px}
 
+.zob-dochod-filter{
+  margin-top:8px; padding:8px 10px 9px; border-top:1px dashed var(--zob-edge);
+  display:flex; flex-wrap:wrap; align-items:center; gap:8px 12px;
+}
+.zob-dochod-label{
+  font-size:.7rem; font-weight:700; color:var(--zob-ink-soft); text-transform:uppercase;
+  letter-spacing:.04em; flex-shrink:0;
+}
+.zob-dochod-row{display:flex; gap:5px; align-items:center}
+.zob-dochod-inp{
+  width:130px; background:var(--zob-cream); border:1px solid var(--zob-edge); border-radius:7px;
+  padding:5px 9px; font:inherit; font-size:.8rem; color:var(--zob-ink);
+}
+.zob-dochod-inp:focus{outline:none; border-color:var(--zob-spine)}
+.zob-dochod-clear{
+  background:var(--zob-cream); border:1px solid var(--zob-edge); border-radius:7px;
+  color:var(--zob-ink-soft); padding:4px 9px; cursor:pointer; font:inherit; font-size:.8rem;
+}
+.zob-dochod-clear:hover{background:#fff; border-color:var(--zob-spine); color:var(--zob-spine)}
+.zob-dochod-presets{display:flex; gap:4px}
+.zob-dochod-presets button{
+  background:var(--zob-cream); border:1px solid var(--zob-edge); border-radius:6px;
+  color:var(--zob-ink-soft); font:inherit; font-size:.74rem; font-weight:650; padding:4px 9px; cursor:pointer;
+}
+.zob-dochod-presets button:hover{background:#fff; border-color:var(--zob-spine); color:var(--zob-ink)}
+.zob-dochod-presets button.active{background:var(--zob-ink); border-color:var(--zob-ink); color:var(--zob-cream)}
+
 /* Split: lista jak Arkusz + otwarta teczka */
 .zob-split-container{flex:1; min-height:0; display:flex; gap:14px; overflow:hidden}
 .zob-split-container.mode-list .zob-drawer{width:100%; max-width:none; flex:1}
