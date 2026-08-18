@@ -5907,6 +5907,11 @@ document.addEventListener('mousemove', (e)=>{
 document.addEventListener('mouseup', ()=>{ App.selecting=false; App.selectCol=null; });
 document.addEventListener('contextmenu', e=>{ if(e.target.closest('#dataGrid')) {/* handled per-row */} });
 document.addEventListener('keydown', e=>{ if(e.key==='Escape') hideCtx(); });
+// Poinformuj okno główne (panic button całej aplikacji) o Esc — niezależnie od lokalnej logiki Arkusza
+document.addEventListener('keydown', e=>{
+  if(e.key!=='Escape') return;
+  try{ if(window.parent && window.parent!==window) window.parent.postMessage({type:'EGZE_ESC_TICK'}, '*'); }catch(_){}
+});
 document.addEventListener('paste', e=>{ if(isPanicOn()){ e.preventDefault(); return; } pasteEvent(e); });
 document.addEventListener('keydown', e=>{
   if(isPanicOn() && e.key!=='Escape'){ e.preventDefault(); return; }

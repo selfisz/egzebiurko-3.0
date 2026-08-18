@@ -399,6 +399,89 @@ window.StatusBar      = StatusBar;
 window.showToast      = showToast;
 
 
+/* ─── PANIC BUTTON (cała aplikacja): 2× Esc → nakładka „urzędowa” ── */
+const PanicButton = (() => {
+  const REGULATION_HTML = `
+<h3>Rozdział 1<br>Przepisy ogólne</h3>
+<p>§ 1. Rozporządzenie określa sposób postępowania wierzycieli w zakresie czynności zmierzających do zastosowania środków egzekucyjnych, w tym sposób i terminy przekazywania upomnień oraz tytułów wykonawczych do organu egzekucyjnego.</p>
+<p>§ 2. Wierzyciel obowiązany jest do systematycznej kontroli terminowości zapłaty należności pieniężnych, w szczególności poprzez prowadzenie ewidencji tych należności oraz podejmowanie czynności zmierzających do zastosowania środków egzekucyjnych.</p>
+<p>§ 3. Ilekroć w rozporządzeniu jest mowa o:</p>
+<p>1) należności pieniężnej — rozumie się przez to obowiązek podlegający egzekucji administracyjnej o charakterze pieniężnym;</p>
+<p>2) upomnieniu — rozumie się przez to pisemne wezwanie zobowiązanego do wykonania obowiązku z zagrożeniem skierowania sprawy na drogę postępowania egzekucyjnego;</p>
+<p>3) tytule wykonawczym — rozumie się przez to dokument stanowiący podstawę wszczęcia postępowania egzekucyjnego.</p>
+<h3>Rozdział 2<br>Czynności wierzyciela przed wszczęciem egzekucji</h3>
+<p>§ 4. Wierzyciel, nie później niż po upływie 7 dni od dnia, w którym upłynął termin wykonania obowiązku przez zobowiązanego, przesyła upomnienie, zawierające wezwanie do wykonania obowiązku z zagrożeniem skierowania sprawy na drogę postępowania egzekucyjnego.</p>
+<p>§ 5. Jeżeli obowiązek nie zostanie wykonany w terminie 7 dni od dnia doręczenia upomnienia, wierzyciel podejmuje czynności zmierzające do zastosowania środków egzekucyjnych.</p>
+<p>§ 6. Czynności, o których mowa w § 5, polegają w szczególności na wystawieniu tytułu wykonawczego i przekazaniu go właściwemu organowi egzekucyjnemu.</p>
+<h3>Rozdział 3<br>Ewidencja i sprawozdawczość</h3>
+<p>§ 7. Wierzyciel prowadzi ewidencję wystawionych upomnień i tytułów wykonawczych, zawierającą w szczególności datę wystawienia, wysokość należności oraz dane zobowiązanego.</p>
+<p>§ 8. Ewidencja, o której mowa w § 7, może być prowadzona w postaci elektronicznej.</p>
+<p class="app-panic-meta" style="text-indent:0;margin-top:24px">— wyciąg skrócony do użytku służbowego; pełny tekst: Dz.U. — Rozporządzenie Ministra Finansów w sprawie postępowania wierzycieli należności pieniężnych —</p>
+  `;
+
+  const BURST_MS = 650;
+  let escTimes = [];
+  let prevTitle = '';
+
+  function el() { return document.getElementById('app-panic-cover'); }
+
+  function isOn() {
+    const e = el();
+    return !!(e && e.classList.contains('show'));
+  }
+
+  function show() {
+    const e = el();
+    if (!e || isOn()) return;
+    const body = document.getElementById('app-panic-body');
+    if (body && !body.dataset.ready) { body.innerHTML = REGULATION_HTML; body.dataset.ready = '1'; }
+    e.classList.add('show');
+    escTimes = [];
+    prevTitle = document.title;
+    document.title = 'Rozporządzenie Ministra Finansów';
+    // przenieś fokus poza ewentualny iframe Arkusza, żeby kolejne Esc łapał dokument główny
+    try { if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); } catch {}
+    e.focus();
+  }
+
+  function hide() {
+    const e = el();
+    if (!e || !isOn()) return;
+    e.classList.remove('show');
+    escTimes = [];
+    if (prevTitle) document.title = prevTitle;
+  }
+
+  function noteEscTick() {
+    const now = Date.now();
+    escTimes = escTimes.filter(t => now - t < BURST_MS);
+    escTimes.push(now);
+    if (escTimes.length >= 2) {
+      escTimes = [];
+      if (isOn()) hide(); else show();
+    }
+  }
+
+  document.addEventListener('keydown', (e) => {
+    if (isOn()) {
+      if (e.key === 'Escape') { e.preventDefault(); noteEscTick(); }
+      else { e.preventDefault(); e.stopPropagation(); }
+      return;
+    }
+    if (e.key === 'Escape') noteEscTick();
+  }, true);
+
+  // Esc wcisnięty wewnątrz iframe Arkusza też ma się liczyć — arkusz3.html
+  // przekazuje to jako postMessage (patrz EGZE_ESC_TICK w html/arkusz3.html)
+  window.addEventListener('message', (e) => {
+    if (e.data && e.data.type === 'EGZE_ESC_TICK') noteEscTick();
+  });
+
+  return { show, hide, isOn };
+})();
+window.PanicButton = PanicButton;
+
+
 /* ─── PEŁNY PAKIET EGZEBIURKO (zapisz / wczytaj) ───────────── */
 const EgzeBundle = (() => {
   const BUNDLE_VERSION = 1;
