@@ -18,6 +18,9 @@ const WroModule = (() => {
   const _annotBtnCtx = {};
   let _annotBtnSeq = 0;
   let minDochodFilter = 0;
+  let _lookupIndex = null;
+  let _wroFiltered = [];
+  let _wroVirtRaf = 0;
 
   const icons = {
     "Raporter":"📊","STIR":"🏦","Księgi Wieczyste":"🏢",
@@ -278,6 +281,15 @@ const WroModule = (() => {
       const avail = Object.keys(bazaDanych[id]).filter(k => k !== '_meta' && bazaDanych[id][k].length > 1);
       return { id, availableSources: avail, sourceCount: avail.length };
     }).sort((a, b) => b.sourceCount - a.sourceCount || a.id.localeCompare(b.id));
+    _lookupIndex = Object.create(null);
+    entities.forEach(item => {
+      const ent = bazaDanych[item.id];
+      const meta = (ent && ent._meta) || {};
+      [item.id, meta.a3, meta.b3].forEach(v => {
+        const d = String(v || '').replace(/\D/g, '');
+        if (d && !_lookupIndex[d]) _lookupIndex[d] = item.id;
+      });
+    });
   }
 
   function persistBazaDanych() {
@@ -465,6 +477,7 @@ const WroModule = (() => {
     if (!listEl) return;
 
     if (!entities.length) {
+      _wroFiltered = [];
       listEl.innerHTML = '<div class="wro-empty-list">Brak wczytanych danych.</div>';
       return;
     }
@@ -476,70 +489,105 @@ const WroModule = (() => {
       ? ZobowiazaniModule.getIdIndex()
       : {};
 
-    const filtered = entities.filter(item => {
-      const view = resolveEntityView(item.id, arkIndex);
-      const blob = [item.id, view.displayName, view.a3, view.b3, view.person && view.person.name].filter(Boolean).join(' ').toLowerCase();
-      const matchText = !lf || blob.includes(lf);
-      let matchFilters = true;
+    _wroFiltered = entities.filter(item => {
       if (activeFilters.size > 0) {
         for (const req of activeFilters) {
-          if (!item.availableSources.includes(req)) { matchFilters = false; break; }
+          if (!item.availableSources.includes(req)) return false;
         }
       }
-      const matchDochod = !minDochodFilter || getMaxDochodForEntity(item.id) >= minDochodFilter;
-      return matchText && matchFilters && matchDochod;
+      if (minDochodFilter && getMaxDochodForEntity(item.id) < minDochodFilter) return false;
+      if (!lf) return true;
+      const view = resolveEntityView(item.id, arkIndex);
+      item._view = view;
+      const blob = [item.id, view.displayName, view.a3, view.b3, view.person && view.person.name].filter(Boolean).join(' ').toLowerCase();
+      return blob.includes(lf);
     });
 
-    listEl.innerHTML = filtered.map(item => {
-      const isAnalyzed = analyzed.has(item.id);
-      const inCart     = cart.has(item.id);
-      const isActive   = currentActiveId === item.id;
-      const view = resolveEntityView(item.id, arkIndex);
-      const stubMark = view.stub ? '<span class="wro-stub-chip" title="Tylko OGNIVO/AUM — brak raportu WRO">bez WRO</span>' : '';
-      const fromArk = view.person ? '<span class="wro-stub-chip ark" title="Dopasowano z Arkusza">teczka</span>' : '';
+    bindWroListEvents(listEl);
+    listEl.dataset.virt = '1';
+    if (!listEl.querySelector('#wro-virt-spacer')) {
+      listEl.innerHTML = `<div class="wro-virt" id="wro-virt"><div class="wro-virt-spacer" id="wro-virt-spacer"></div><div class="wro-virt-window" id="wro-virt-window"></div></div>`;
+    }
+    paintWroWindow(listEl, analyzed, cart);
+  }
 
-      const folderIco = `<span class="wro-icon-jump wro-open-teczka" data-entity="${escWro(item.id)}" data-open-teczka="1" title="${view.person ? 'Otwórz teczkę w Szafce' : 'Szukaj teczki w Szafce'}">📂</span>`;
-      const statusBadges = (inCart ? '🛒 ' : '') + (isAnalyzed ? '✅' : '');
-      const maxDochod = item.availableSources.includes('Dochody') ? getMaxDochodForEntity(item.id) : 0;
-      const dochodBadge = maxDochod > 0
-        ? `<span class="wro-dochod-badge${maxDochod >= 60000 ? ' high' : ''}" title="Maks. dochód roczny z PIT">💰 ${formatPln(maxDochod)}</span>`
-        : '';
-      const iconsHtml = item.availableSources.map(s => {
-        const safe = s.replace(/[^a-zA-Z0-9]/g,'');
-        const style = s.startsWith('Wynik:') ? 'color:#ef4444;font-weight:bold;' : '';
-        return `<span class="wro-icon-jump" style="${style}" data-entity="${item.id}" data-section="${safe}" title="${s}">${icons[s]||'📄'}</span>`;
-      }).join('');
-
-      return `
-        <div class="wro-list-item ${isAnalyzed ? 'is-analyzed' : ''} ${isActive ? 'active' : ''} ${view.stub ? 'is-stub' : ''}" data-id="${escWro(item.id)}">
-          <div class="wro-list-title">
-            <span title="${escWro(item.id)}">${escWro(view.displayName)}</span>
-            <span>${statusBadges}${dochodBadge}${stubMark}${fromArk}</span>
-          </div>
-          <div class="wro-list-score">${folderIco} ${iconsHtml}</div>
-        </div>
-      `;
+  function wroItemHtml(item, analyzed, cart) {
+    const isAnalyzed = analyzed.has(item.id);
+    const inCart     = cart.has(item.id);
+    const isActive   = currentActiveId === item.id;
+    const view = item._view || resolveEntityView(item.id);
+    const stubMark = view.stub ? '<span class="wro-stub-chip" title="Tylko OGNIVO/AUM — brak raportu WRO">bez WRO</span>' : '';
+    const fromArk = view.person ? '<span class="wro-stub-chip ark" title="Dopasowano z Arkusza">teczka</span>' : '';
+    const folderIco = `<span class="wro-icon-jump wro-open-teczka" data-entity="${escWro(item.id)}" data-open-teczka="1" title="${view.person ? 'Otwórz teczkę w Szafce' : 'Szukaj teczki w Szafce'}">📂</span>`;
+    const statusBadges = (inCart ? '🛒 ' : '') + (isAnalyzed ? '✅' : '');
+    const maxDochod = item.availableSources.includes('Dochody') ? getMaxDochodForEntity(item.id) : 0;
+    const dochodBadge = maxDochod > 0
+      ? `<span class="wro-dochod-badge${maxDochod >= 60000 ? ' high' : ''}" title="Maks. dochód roczny z PIT">💰 ${formatPln(maxDochod)}</span>`
+      : '';
+    const iconsHtml = item.availableSources.map(s => {
+      const safe = s.replace(/[^a-zA-Z0-9]/g,'');
+      const style = s.startsWith('Wynik:') ? 'color:#ef4444;font-weight:bold;' : '';
+      return `<span class="wro-icon-jump" style="${style}" data-entity="${escWro(item.id)}" data-section="${safe}" title="${s}">${icons[s]||'📄'}</span>`;
     }).join('');
 
-    // Bind click events
-    listEl.querySelectorAll('.wro-list-item').forEach(el => {
-      el.addEventListener('click', ev => {
-        if (ev.target.classList.contains('wro-icon-jump')) return;
-        selectEntity(el.dataset.id);
-      });
-    });
-    listEl.querySelectorAll('.wro-icon-jump').forEach(el => {
-      el.addEventListener('click', ev => {
+    return `
+      <div class="wro-list-item ${isAnalyzed ? 'is-analyzed' : ''} ${isActive ? 'active' : ''} ${view.stub ? 'is-stub' : ''}" data-id="${escWro(item.id)}">
+        <div class="wro-list-title">
+          <span title="${escWro(item.id)}">${escWro(view.displayName)}</span>
+          <span>${statusBadges}${dochodBadge}${stubMark}${fromArk}</span>
+        </div>
+        <div class="wro-list-score">${folderIco} ${iconsHtml}</div>
+      </div>`;
+  }
+
+  function paintWroWindow(listEl, analyzed, cart) {
+    listEl = listEl || document.getElementById('wro-list');
+    const spacer = document.getElementById('wro-virt-spacer');
+    const win = document.getElementById('wro-virt-window');
+    if (!listEl || !spacer || !win) return;
+    analyzed = analyzed || getAnalyzed();
+    cart = cart || getCart();
+    const rowH = 72;
+    const overscan = 8;
+    const n = _wroFiltered.length;
+    spacer.style.height = (n * rowH) + 'px';
+    const start = Math.max(0, Math.floor(listEl.scrollTop / rowH) - overscan);
+    const end = Math.min(n, Math.ceil((listEl.scrollTop + (listEl.clientHeight || 480)) / rowH) + overscan);
+    win.style.transform = 'translateY(' + (start * rowH) + 'px)';
+    const arkIndex = (typeof ZobowiazaniModule !== 'undefined' && typeof ZobowiazaniModule.getIdIndex === 'function')
+      ? ZobowiazaniModule.getIdIndex()
+      : {};
+    let html = '';
+    for (let i = start; i < end; i++) {
+      const item = _wroFiltered[i];
+      if (!item._view) item._view = resolveEntityView(item.id, arkIndex);
+      html += wroItemHtml(item, analyzed, cart);
+    }
+    win.innerHTML = html || (n ? '' : '<div class="wro-empty-list">Brak wyników.</div>');
+  }
+
+  function bindWroListEvents(listEl) {
+    if (!listEl || listEl._wroBound) return;
+    listEl._wroBound = true;
+    listEl.addEventListener('click', ev => {
+      const jump = ev.target.closest('.wro-icon-jump');
+      if (jump) {
         ev.stopPropagation();
-        const id = el.dataset.entity;
-        if (el.dataset.openTeczka) {
-          openInSzafka(id);
-          return;
-        }
-        const sec = el.dataset.section;
-        selectEntity(id, sec);
-      });
+        const id = jump.dataset.entity;
+        if (jump.dataset.openTeczka) { openInSzafka(id); return; }
+        selectEntity(id, jump.dataset.section);
+        return;
+      }
+      const row = ev.target.closest('.wro-list-item');
+      if (row && row.dataset.id) selectEntity(row.dataset.id);
     });
+    listEl.addEventListener('scroll', () => {
+      if (_wroVirtRaf) return;
+      _wroVirtRaf = requestAnimationFrame(() => {
+        _wroVirtRaf = 0;
+        paintWroWindow(listEl);
+      });
+    }, { passive: true });
   }
 
   function selectEntity(id, scrollToSection = null) {
@@ -1017,9 +1065,13 @@ const WroModule = (() => {
     const tries = [pesel, nip, digitsId(pesel), digitsId(nip)].filter(Boolean);
     for (const t of tries) {
       if (db[t]) return t;
+      const d = digitsId(t);
+      if (d && _lookupIndex && _lookupIndex[d]) return _lookupIndex[d];
     }
     const want = new Set(tries.map(digitsId).filter(d => d.length >= 10));
     const nameLc = String(name || '').trim().toLowerCase();
+    if (nameLc && db[name]) return name;
+    if (!want.size && !nameLc) return null;
     const keys = Object.keys(db);
     for (let i = 0; i < keys.length; i++) {
       const k = keys[i];
@@ -1104,13 +1156,14 @@ const WroModule = (() => {
   function activate(params = {}) {
     if (!activated) { activated = true; }
     tryLoadPersistedBaza();
-    render();
+    const live = document.getElementById('wro-list');
+    if (!live) render();
 
     if (params.pesel || params.nip) {
       const id = findEntityKey(params.pesel, params.nip) || params.pesel || params.nip;
       if (bazaDanych[id]) {
         const sec = params.section ? String(params.section).replace(/[^a-zA-Z0-9]/g, '') : null;
-        setTimeout(() => selectEntity(id, sec), 100);
+        setTimeout(() => selectEntity(id, sec), 40);
       } else {
         showToast('ℹ️ Brak tej osoby w bazie WRO — wczytaj plik bazy', 'info');
       }
@@ -1196,22 +1249,14 @@ const WroModule = (() => {
     if (!id || !db) return null;
     const clean = String(id).replace(/\D/g, '');
     if (!clean && typeof id !== 'string') return null;
-    
-    // Szukamy po kluczu bezpośrednim lub po polach NIP/PESEL wewnątrz encji
+
     let entity = db[id] || (clean ? db[clean] : null);
+    if (!entity && clean && _lookupIndex && _lookupIndex[clean]) {
+      entity = db[_lookupIndex[clean]];
+    }
     if (!entity && clean) {
-      const keys = Object.keys(db);
-      for (const k of keys) {
-        const ent = db[k];
-        if (!ent) continue;
-        const meta = ent._meta || {};
-        const a3 = String(meta.a3 || '').replace(/\D/g, '');
-        const b3 = String(meta.b3 || '').replace(/\D/g, '');
-        if (k.replace(/\D/g, '') === clean || (a3 && a3 === clean) || (b3 && b3 === clean)) {
-          entity = ent;
-          break;
-        }
-      }
+      const mapped = _lookupIndex && _lookupIndex[clean];
+      if (mapped) entity = db[mapped];
     }
     if (!entity || !entity['UFG CEPIK'] || entity['UFG CEPIK'].length <= 1) {
       return null;

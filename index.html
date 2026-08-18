@@ -1123,6 +1123,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
   width:100%; box-sizing:border-box; text-align:left;
   padding:9px 12px; border:0; border-bottom:1px solid var(--zob-edge);
   background:transparent; color:var(--zob-ink); cursor:pointer; font:inherit;
+  min-height:52px;
 }
 .zob-person-row:nth-child(even){background:color-mix(in srgb, var(--zob-paper) 55%, transparent)}
 .zob-person-row:hover{background:color-mix(in srgb, var(--zob-paper2) 80%, #fff)}
@@ -1162,7 +1163,22 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
   border:1px solid var(--zob-edge); border-radius:999px; padding:2px 8px; letter-spacing:0;
   text-transform:none;
 }
-.zob-folder-scroll{flex:1; overflow:auto; min-height:0}
+.zob-virt{position:relative;width:100%}
+.zob-virt-spacer{width:100%;pointer-events:none}
+.zob-virt-window{position:absolute;top:0;left:0;right:0;will-change:transform}
+.zob-fresh-mark{
+  display:inline-block;margin-left:6px;font-size:.58rem;font-weight:800;letter-spacing:.04em;
+  text-transform:uppercase;padding:1px 6px;border-radius:999px;vertical-align:middle;
+  background:color-mix(in srgb, var(--zob-olive) 22%, #fff); color:var(--zob-olive);
+  border:1px solid color-mix(in srgb, var(--zob-olive) 35%, transparent);
+}
+.zob-person-row.is-fresh,.zob-reg-table tbody tr.is-fresh td{
+  background:color-mix(in srgb, var(--zob-olive) 8%, var(--zob-cream)) !important;
+}
+.wro-virt{position:relative;width:100%}
+.wro-virt-spacer{width:100%;pointer-events:none}
+.wro-virt-window{position:absolute;top:0;left:0;right:0;will-change:transform}
+.wro-list-item{min-height:71px;box-sizing:border-box}
 .zob-folder-empty{
   padding:28px 16px; text-align:center; color:var(--zob-ink-soft); font-size:.85rem; line-height:1.4;
 }
@@ -1181,6 +1197,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
 .zob-reg-table thead th .sort-ind{opacity:.55; margin-left:4px; font-size:.65rem}
 .zob-reg-table tbody tr{
   cursor:pointer; transition: background .12s;
+  height:37px;
 }
 .zob-reg-table tbody tr:nth-child(even) td{background:color-mix(in srgb, var(--zob-paper) 55%, transparent)}
 .zob-reg-table tbody tr:hover td{background:color-mix(in srgb, var(--zob-paper2) 80%, #fff)}

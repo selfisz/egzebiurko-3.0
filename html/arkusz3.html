@@ -4630,6 +4630,7 @@ function applyExcelRefresh({added, archive}){
 
   const src=active();
   let addN=0;
+  const addedKeys=[];
   (added||[]).forEach(p=>{
     const key=cleanId(p.key);
     if(!key) return;
@@ -4652,29 +4653,36 @@ function applyExcelRefresh({added, archive}){
       });
     }
     addN++;
+    addedKeys.push(key);
   });
 
   const archList=archive||[];
+  const at=new Date().toISOString();
   if(archList.length){
     const map=readSzafkaArchiveMap();
-    const at=new Date().toISOString();
     archList.forEach(p=>{
       const key=cleanId(p.key);
       if(!key) return;
       map[key]={ at, name:p.name||'', reason:'Dodaj do bazy' };
     });
     writeSzafkaArchiveMap(map);
-    try{
-      if(window.parent && window.parent!==window && window.parent.ZobowiazaniModule && typeof window.parent.ZobowiazaniModule.applyArchiveIds==='function'){
-        window.parent.ZobowiazaniModule.applyArchiveIds(archList.map(p=>p.key), { at, reason:'Dodaj do bazy' });
-      }
-    }catch(_){}
   }
 
   refreshRegistryDerived(reg);
   render();
-  scheduleAutosave();
-  const msg='Dodano '+addN+' do ★ Zobowiązani'+(archList.length?(' · '+archList.length+' → Archiwum Szafki (znikną z listy aktywnych)'):'')+'. Otwórz kartę Zobowiązani / Szafkę, żeby zobaczyć.';
+  try { runAutosave(); } catch(_){}
+  try{
+    const Z=window.parent && window.parent!==window ? window.parent.ZobowiazaniModule : (typeof ZobowiazaniModule!=='undefined'?ZobowiazaniModule:null);
+    if(Z){
+      if(archList.length && typeof Z.applyArchiveIds==='function'){
+        Z.applyArchiveIds(archList.map(p=>p.key), { at, reason:'Dodaj do bazy' }, { silent:true });
+      }
+      if(typeof Z.afterExcelRefresh==='function'){
+        Z.afterExcelRefresh({ addedKeys, addedCount:addN, archiveCount:archList.length });
+      }
+    }
+  }catch(_){}
+  const msg='Dodano '+addN+' do ★ Zobowiązani'+(archList.length?(' · '+archList.length+' → Archiwum Szafki'):'')+(addN?'. Szafka → filtr Nowe.':'');
   toast(msg);
 }
 
@@ -6007,13 +6015,18 @@ renderSwatches(); fillRegSysMenu(); setRibbonTab(App.ribbonTab||'dane'); render(
 
 window.addEventListener('message', (e) => {
   if (e.data && e.data.type === 'GET_DB') {
-    // Bez powiadamiania rodzica — inaczej pętla sync ↔ autosave
+    // Pamięć RAM, nie localStorage — przy ~2k wierszy quota często obcina zapis,
+    // a Szafka dostawała starą bazę (archiwum w LS działało, nowe teczki nie).
+    let data=null;
+    try { data=buildAutosavePayload(); } catch(_){}
+    if(!data){
+      try { data=localStorage.getItem(AUTOSAVE_KEY); } catch(_){}
+    }
+    window.parent.postMessage({ type: 'DB_DATA', payload: data }, '*');
     const prevSkip=App._skipParentNotify;
     App._skipParentNotify=true;
     try { runAutosave(); } catch(_){}
     App._skipParentNotify=prevSkip;
-    const raw = localStorage.getItem(AUTOSAVE_KEY);
-    window.parent.postMessage({ type: 'DB_DATA', payload: raw }, '*');
   } else if (e.data && e.data.type === 'SET_DB') {
     try {
       const payload = e.data.payload;
