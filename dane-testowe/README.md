@@ -62,10 +62,11 @@ To są **w 100% fikcyjne dane** (imiona, PESEL, NIP, adresy, kwoty) — nie odpo
 żadnym realnym osobom czy sprawom. Numery PESEL/NIP nie mają poprawnej sumy kontrolnej,
 ale aplikacja i tak dopasowuje wyłącznie po cyfrach, więc to nie ma znaczenia dla testów.
 
-## Automaty JPK + OGNIVO (sito zrzutni)
+## Zrzutnia w Analityce WRO
 
-W module **Automaty JPK/OGNIVO** można wgrać te same raporty, które makro Excel brało
-z `A:\Automaty\1_Zrzutnia\`. Aplikacja **nie czyta dysku A:** — wskazujesz pliki albo folder.
+W **Analityce WRO** → **Wskaż folder** (ten sam zestaw co kiedyś `A:\Automaty\1_Zrzutnia\`),
+potem przycisk **JPK** / **OGNIVO** / **AUM**. Wynik wchodzi na listę jako `Wynik: JPK` /
+`Wynik: OGNIVO` / `Wynik: AUM`.
 
 Mini-zestaw (fikcyjne PESEL-e z bazy 15 osób):
 
@@ -75,9 +76,9 @@ Mini-zestaw (fikcyjne PESEL-e z bazy 15 osób):
 | `see11-sita.csv` | SEE.11 (C klasyfikacja, F NIP, G PESEL, N klasyfikacja) |
 | `see18-sita.csv` | SEE.18 (H PESEL, K klasyfikacja, L bank/wierzyciel) |
 | `platforma-sita.csv` | Platforma do sita JPK |
+| `aum-sita.csv` | AUM (PESEL + rachunki w kolumnie F, rozdzielane `·`) |
 
-Oczekiwany wynik **Analiza OGNIVO**: Anna Nowak (nowy Pekao) i Jan Kowalski (mBank,
+Oczekiwany **OGNIVO** i **AUM**: Anna Nowak (nowy Pekao) i Jan Kowalski (mBank,
 bo w SEE.18 ma K=W). Odrzut C=T / N=W1 / brak w SEE.11 nie przechodzą.
 
-Oczekiwany wynik **Analiza JPK**: jeden wiersz NIP `1111111111` (reszta: kreski,
-brak na białej liście SEE.11 albo dłużnik już w SEE.18).
+Oczekiwany **JPK**: jeden wiersz NIP `1111111111`.

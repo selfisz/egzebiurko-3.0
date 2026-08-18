@@ -381,16 +381,30 @@
     const fName = String(name || '').toUpperCase();
     const base = fName.split(/[/\\]/).pop() || fName;
     if (base.indexOf('~$') === 0) return null;
-    const roles = [];
-    if (base.indexOf('PLATFORMA') >= 0) roles.push('platforma');
-    if (base.indexOf('OGNIVO') >= 0 || base.indexOf('OGNIVKO') >= 0) roles.push('ognivo');
     if (base.indexOf('SEE.11') >= 0 || base.indexOf('SEE_11') >= 0 || base.indexOf('SEE 11') >= 0 || base.indexOf('SEE11') >= 0) {
-      roles.push('see11');
+      return 'see11';
     }
     if (base.indexOf('SEE.18') >= 0 || base.indexOf('SEE_18') >= 0 || base.indexOf('SEE 18') >= 0 || base.indexOf('SEE18') >= 0) {
-      roles.push('see18');
+      return 'see18';
     }
-    return roles[0] || null;
+    if (base.indexOf('OGNIVO') >= 0 || base.indexOf('OGNIVKO') >= 0) return 'ognivo';
+    if (base.indexOf('AUM') >= 0) return 'aum';
+    if (base.indexOf('PLATFORMA') >= 0 || base.indexOf('ANALITYCZNA') >= 0) return 'platforma';
+    return null;
+  }
+
+  async function tableFromFile(file) {
+    const name = String((file && file.name) || '').toLowerCase();
+    if (/\.xls$/.test(name) && !/\.xlsx$/.test(name) && !/\.xlsm$/.test(name)) {
+      throw new Error('Stary format .xls. Zapisz jako .xlsx albo CSV.');
+    }
+    if (/\.xlsx$|\.xlsm$/.test(name)) {
+      const buf = await file.arrayBuffer();
+      return readXlsxFirstSheet(buf);
+    }
+    const buf = await file.arrayBuffer();
+    const parsed = wczytajCsvTekst(decodeTextBuffer(buf));
+    return { rows: parsed.rows, separator: parsed.separator, kind: 'csv' };
   }
 
   function cell(row, col1) {
@@ -882,6 +896,179 @@
     ].join('\n');
   }
 
+  function splitAumAccounts(lista) {
+    let s = getStr(lista);
+    if (!s.trim()) return [];
+    s = s.replace(/\r\n/g, '·').replace(/\n/g, '·').replace(/;/g, '·').replace(/•/g, '·');
+    return s.split('·').map(x => String(x || '').trim()).filter(Boolean);
+  }
+
+  function detectAumLayout(rows) {
+    const lim = Math.min(15, rows.length);
+    for (let i = 0; i < lim; i++) {
+      const h = (rows[i] || []).map(x => getStr(x).toLowerCase());
+      const iPesel = h.findIndex(x => /pesel/.test(x));
+      const iAcc = h.findIndex(x => /rachun/.test(x));
+      if (iPesel >= 0 || iAcc >= 0) {
+        const iNip = h.findIndex(x => /nip/.test(x));
+        const iName = h.findIndex(x => /imi|nazw|podmiot|nazwa/.test(x));
+        return {
+          start: i + 2,
+          iPesel: iPesel >= 0 ? iPesel : 0,
+          iNip: iNip >= 0 ? iNip : 1,
+          iName: iName >= 0 ? iName : 2,
+          iAcc: iAcc >= 0 ? iAcc : 5
+        };
+      }
+    }
+    return { start: 2, iPesel: 0, iNip: 1, iName: 2, iAcc: 5 };
+  }
+
+  function analizaAum(input) {
+    const aum = padCols((input && input.aum) || [], 6);
+    const see11 = padCols((input && input.see11) || [], 14);
+    const see18 = padCols((input && input.see18) || [], 12);
+    if (!aum.length) {
+      return { ok: false, code: 'empty', error: 'Brak pliku AUM.' };
+    }
+
+    const layout = detectAumLayout(aum);
+    const dictSEE18 = Object.create(null);
+    for (let i = 1; i < see18.length; i++) {
+      if (isWW1(cell(see18[i], 11))) continue;
+      const bank = normalizujNazweBanku(cell(see18[i], 12));
+      if (!bank) continue;
+      const pesel = cleanPESEL(cell(see18[i], 8));
+      if (pesel) dictSEE18[(pesel + '|' + bank).toUpperCase()] = true;
+    }
+
+    const exists = Object.create(null);
+    const rejected = Object.create(null);
+    let liczbaSEE11 = 0;
+    for (let i = 1; i < see11.length; i++) {
+      const pesel = cleanPESEL(cell(see11[i], 7));
+      const nip = cleanNIP(cell(see11[i], 6));
+      if (!pesel && !nip) continue;
+      liczbaSEE11++;
+      if (pesel) exists[pesel] = true;
+      if (nip) exists['n:' + nip] = true;
+      const klasC = normalizeKlas(cell(see11[i], 3));
+      if (klasC === 'T' || isWW1(cell(see11[i], 14))) {
+        if (pesel) rejected[pesel] = true;
+        if (nip) rejected['n:' + nip] = true;
+      }
+    }
+
+    const headers = ['PESEL', 'NIP', 'Podmiot', 'Nowe rachunki (do zajęcia)'];
+    const arrOut = [headers];
+    let rekordyAum = 0;
+    let zNowymBankiem = 0;
+    let liczbaNowychBankow = 0;
+    let liczbaBankowWSEE18 = 0;
+    let odrzuconeSEE11 = 0;
+    let odrzuconeBrakSEE11 = 0;
+
+    for (let i = layout.start - 1; i < aum.length; i++) {
+      const pesel = cleanPESEL(aum[i][layout.iPesel]);
+      const nip = cleanNIP(aum[i][layout.iNip]);
+      if (!pesel && !nip) continue;
+      rekordyAum++;
+      const name = getStr(aum[i][layout.iName]);
+      const parts = splitAumAccounts(aum[i][layout.iAcc]);
+      const seen = Object.create(null);
+      const nowe = [];
+      for (let p = 0; p < parts.length; p++) {
+        const raw = parts[p];
+        const norm = normalizujNazweBanku(raw);
+        if (!norm || seen[norm]) continue;
+        seen[norm] = true;
+        const inSee = !!(pesel && dictSEE18[(pesel + '|' + norm).toUpperCase()]);
+        if (inSee) liczbaBankowWSEE18++;
+        else {
+          nowe.push(raw);
+          liczbaNowychBankow++;
+        }
+      }
+      if (!nowe.length) continue;
+      zNowymBankiem++;
+      const rej = (pesel && rejected[pesel]) || (nip && rejected['n:' + nip]);
+      if (rej) {
+        odrzuconeSEE11++;
+        continue;
+      }
+      const ex = (pesel && exists[pesel]) || (nip && exists['n:' + nip]);
+      if (!ex) {
+        odrzuconeBrakSEE11++;
+        continue;
+      }
+      arrOut.push([pesel, nip, name, nowe.join(' · ')]);
+    }
+
+    const diagnostics = {
+      rekordyAum,
+      zNowymBankiem,
+      liczbaNowychBankow,
+      liczbaBankowWSEE18,
+      liczbaSEE11,
+      odrzuconeSEE11,
+      odrzuconeBrakSEE11,
+      outRows: Math.max(0, arrOut.length - 1)
+    };
+
+    if (arrOut.length < 2) {
+      return {
+        ok: false,
+        code: 'zero',
+        error: zNowymBankiem === 0 ? 'AUM – nie znaleziono żadnego nowego banku.' : 'Brak rekordów AUM do zajęcia.',
+        diagnostics,
+        rows: arrOut
+      };
+    }
+
+    return {
+      ok: true,
+      diagnostics,
+      rows: arrOut,
+      fileName: 'AUM_Wynik_' + timestampStamp() + '.csv'
+    };
+  }
+
+  function formatAumDiagnostics(d) {
+    if (!d) return '';
+    return [
+      'AUM – diagnostyka',
+      '-------------------------------------------------------',
+      'Rekordy AUM (PESEL/NIP): ' + d.rekordyAum,
+      'Osoby z nowym bankiem: ' + d.zNowymBankiem,
+      'Nowe banki: ' + d.liczbaNowychBankow,
+      'Banki już w SEE.18: ' + d.liczbaBankowWSEE18,
+      'Odrzucone – C=T / N=W/W1: ' + d.odrzuconeSEE11,
+      'Odrzucone – brak SEE.11: ' + d.odrzuconeBrakSEE11,
+      'Wynik końcowy: ' + d.outRows
+    ].join('\n');
+  }
+
+  function aumRowsToWro(rows) {
+    const byId = {};
+    if (!rows || rows.length < 2) return byId;
+    const headers = (rows[0] || []).map(h => getStr(h));
+    for (let i = 1; i < rows.length; i++) {
+      const pesel = cleanPESEL(cell(rows[i], 1));
+      const nip = cleanNIP(cell(rows[i], 2));
+      const id = pesel || nip || ('AUM_' + i);
+      if (!byId[id]) {
+        byId[id] = {
+          headers: headers,
+          rows: [],
+          name: cell(rows[i], 3) || id,
+          meta: { b3: pesel, a3: nip }
+        };
+      }
+      byId[id].rows.push((rows[i] || []).slice());
+    }
+    return byId;
+  }
+
   function jpkRowsToWro(rows) {
     const byId = {};
     if (!rows || rows.length < 2) return byId;
@@ -918,18 +1105,24 @@
     decodeTextBuffer,
     readXlsxFirstSheet,
     classifyDumpName,
+    tableFromFile,
     cell,
     normalizujNazweBanku,
     analizaOgnivo,
     formatOgnivoDiagnostics,
     ognivoRowsToStore,
     ognivoRowsToWro,
+    analizaAum,
+    formatAumDiagnostics,
+    aumRowsToWro,
     analizaJpk,
     formatJpkDiagnostics,
     jpkRowsToWro,
     tableToCsv,
     timestampStamp,
-    findOgnivoStartRow
+    findOgnivoStartRow,
+    detectAumLayout,
+    splitAumAccounts
   };
 
   root.AutomatyCore = AutomatyCore;

@@ -63,7 +63,6 @@ const WorkspaceTabs = (() => {
     arkusz: 'Arkusz',
     zobowiazani: 'Szafka teczek',
     ognivo: 'OGNIVO',
-    automaty: 'Automaty JPK/OGNIVO',
     wro: 'Analityka WRO',
     zakladka1: 'Wklepywator Excel',
     zakladka2: 'Rozliczenia',

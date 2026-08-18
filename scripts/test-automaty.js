@@ -57,6 +57,8 @@ eq(C.classifyDumpName('SEE_11.xlsx'), 'see11', 'SEE_11');
 eq(C.classifyDumpName('SEE 18.csv'), 'see18', 'SEE 18 spacja');
 eq(C.classifyDumpName('SEE18.xlsx'), 'see18', 'SEE18');
 eq(C.classifyDumpName('PLATFORMA_export.xlsx'), 'platforma', 'PLATFORMA');
+eq(C.classifyDumpName('platforma_analityczna.xlsx'), 'platforma', 'analityczna');
+eq(C.classifyDumpName('AUM_rachunki.xlsx'), 'aum', 'AUM');
 eq(C.classifyDumpName('~$SEE.11.xlsx'), null, 'plik tymczasowy Excel');
 eq(C.classifyDumpName('losowy.csv'), null, 'nieznana nazwa');
 
@@ -203,6 +205,24 @@ const PLATFORM_TITLE = [['Platforma zrzut 1']].concat(PLATFORM);
 const jpk2 = C.analizaJpk({ platforma: PLATFORM_TITLE, see11: SEE11J, see18: SEE18J });
 assert(jpk2.ok, 'JPK z wierszem Platforma w A1');
 eq(C.cleanNIP(jpk2.rows[1][0]), '1111111111', 'JPK title-row: ten sam wynik, nagłówek z wiersza 2');
+
+/* ── SITO AUM ────────────────────────────────────────────── */
+const AUM = [
+  ['PESEL', 'NIP', 'Imię i nazwisko', 'Adres', 'Klasyfikacja', 'Rachunki AUM'],
+  ['90010112345', '', 'Anna Nowak', '', '', 'PKO BANK POLSKI S.A. · BANK PEKAO'],
+  ['85051267890', '', 'Jan Kowalski', '', '', 'mBank S.A.'],
+  ['78091054321', '', 'Odrzut T', '', '', 'ING Bank Śląski'],
+  ['92030198765', '', 'Odrzut W', '', '', 'Alior Bank'],
+  ['88121223456', '', 'Brak SEE.11', '', '', 'Nest Bank']
+];
+const aum = C.analizaAum({ aum: AUM, see11: SEE11, see18: SEE18 });
+assert(aum.ok, 'AUM ok: ' + (aum.error || ''));
+eq(aum.diagnostics.outRows, 2, 'AUM: Anna + Jan');
+assert(aum.rows.some(r => r[0] === '90010112345' && /PEKAO/i.test(r[3]) && !/PKO/i.test(r[3])), 'AUM Anna: tylko nowy Pekao');
+assert(aum.rows.some(r => r[0] === '85051267890'), 'AUM Jan: mBank nowy (SEE.18 K=W)');
+assert(!aum.rows.some(r => r[0] === '78091054321'), 'AUM: C=T odrzuca');
+assert(!aum.rows.some(r => r[0] === '92030198765'), 'AUM: N=W1 odrzuca');
+assert(!aum.rows.some(r => r[0] === '88121223456'), 'AUM: brak SEE.11 odrzuca');
 
 /* ── XLSX pierwszy arkusz ────────────────────────────────── */
 function crc32(u8) {

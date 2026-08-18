@@ -511,39 +511,6 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
 .stored-title{font-size:1rem;font-weight:700;margin-bottom:12px;color:var(--text)}
 
 /* ═══════════════════════════════════════════════
-   AUTOMATY JPK + OGNIVO
-   ═══════════════════════════════════════════════ */
-.aut-wrap{max-width:1400px;margin:0 auto;padding:28px 24px;min-height:0}
-.aut-header{margin-bottom:18px}
-.aut-flow{
-  display:flex;flex-wrap:wrap;align-items:center;gap:8px;
-  margin:0 0 20px;padding:10px 14px;border-radius:10px;
-  background:var(--panel);border:1px solid var(--line);
-  font-size:.8rem;color:var(--muted);font-weight:600;
-}
-.aut-flow-arr{color:var(--accent);font-weight:800}
-.aut-roles{
-  display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));
-  gap:10px;margin-bottom:16px;
-}
-.aut-role{
-  background:var(--panel);border:1px solid var(--line);border-radius:10px;
-  padding:12px 14px;box-shadow:var(--shadow-sm);
-}
-.aut-role.is-ok{border-color:color-mix(in srgb,var(--ok) 45%,var(--line))}
-.aut-role.is-miss{opacity:.78}
-.aut-role-k{font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:700;margin-bottom:4px}
-.aut-role-v{font-size:.86rem;font-weight:600;word-break:break-all}
-.aut-role.is-ok .aut-role-v{color:var(--ok)}
-.aut-actions{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px}
-.aut-diag{
-  background:var(--panel);border:1px solid var(--line);border-radius:10px;
-  padding:14px 16px;font-family:var(--mono);font-size:.78rem;line-height:1.45;
-  white-space:pre-wrap;margin-bottom:16px;color:var(--text);
-}
-.aut-result-btns{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 10px}
-
-/* ═══════════════════════════════════════════════
    WRO MODULE
    ═══════════════════════════════════════════════ */
 .wro-layout{display:flex;flex:1;min-height:0;overflow:hidden}
@@ -575,6 +542,37 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
   text-align:center;transition:.15s;
 }
 .wro-upload-btn:hover{background:var(--accent2)}
+.wro-zrzutnia{
+  background:rgba(255,255,255,.05);
+  border:1px solid rgba(255,255,255,.08);
+  border-radius:8px;padding:10px;
+}
+.wro-zrzutnia-title{
+  font-size:.68rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+  color:#8ba7c5;margin-bottom:8px;
+}
+.wro-zrzutnia-folder{
+  display:block;width:100%;background:rgba(255,255,255,.08);color:#e7eef8;
+  border:1px solid rgba(255,255,255,.1);border-radius:7px;
+  padding:8px 10px;font:inherit;font-size:.8rem;font-weight:600;
+  cursor:pointer;text-align:center;
+}
+.wro-zrzutnia-folder:hover{background:rgba(255,255,255,.14)}
+.wro-zrzutnia-files{display:flex;flex-wrap:wrap;gap:4px;margin:8px 0 0}
+.wro-zrzutnia-chip{
+  font-size:.68rem;padding:2px 7px;border-radius:999px;
+  background:rgba(255,255,255,.06);color:#6b849c;
+  border:1px solid rgba(255,255,255,.06);
+}
+.wro-zrzutnia-chip.ok{color:#bbf7d0;border-color:rgba(187,247,208,.25);background:rgba(16,185,129,.12)}
+.wro-zrzutnia-runs{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:8px}
+.wro-zrzutnia-runs button{
+  background:#1a2332;color:#e7eef8;border:1px solid rgba(255,255,255,.12);
+  border-radius:7px;padding:7px 4px;font:inherit;font-size:.75rem;font-weight:700;
+  cursor:pointer;
+}
+.wro-zrzutnia-runs button:hover{background:var(--accent);border-color:var(--accent);color:#fff}
+.wro-zrzutnia-runs button:disabled{opacity:.45;cursor:default}
 .wro-progress-row{display:flex;gap:8px}
 .wro-prog-btn{
   flex:1;background:rgba(255,255,255,.08);color:#c5d8f0;
@@ -1637,10 +1635,6 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
       <span class="nav-label">OGNIVO</span>
       <span class="nav-badge" id="nav-badge-ognivo" style="display:none"></span>
     </button>
-    <button class="nav-btn" data-module="automaty" onclick="handleNavClick(event, 'automaty')" oncontextmenu="showNavMenu(event, 'automaty')">
-      <span class="nav-icon">⚙️</span>
-      <span class="nav-label">Automaty JPK/OGNIVO</span>
-    </button>
     <button class="nav-btn" data-module="zakladka1" onclick="handleNavClick(event, 'zakladka1')" oncontextmenu="showNavMenu(event, 'zakladka1')">
       <span class="nav-icon">📊</span>
       <span class="nav-label">Wklepywator Excel</span>
@@ -1687,11 +1681,6 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
     <!-- OGNIVO PANEL -->
     <div class="module-panel hidden" id="panel-ognivo">
       <div id="ognivo-app" style="flex:1;min-height:0;overflow-y:auto;overflow-x:hidden"></div>
-    </div>
-
-    <!-- AUTOMATY JPK/OGNIVO -->
-    <div class="module-panel hidden" id="panel-automaty">
-      <div id="automaty-app" style="flex:1;min-height:0;overflow-y:auto;overflow-x:hidden"></div>
     </div>
 
     <!-- WRO PANEL -->
@@ -1766,7 +1755,6 @@ document.addEventListener('DOMContentLoaded', () => {
   StatusBar.init();
   if (window.EgzeBundle) EgzeBundle.bindUi();
   Router.register('ognivo', OgnivoModule);
-  Router.register('automaty', AutomatyModule);
   Router.register('wro', WroModule);
   Router.register('arkusz', ArkuszModule);
   Router.register('zobowiazani', ZobowiazaniModule);
@@ -1783,7 +1771,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Załaduj ostatni widok lub Arkusz
   const last = localStorage.getItem('egze3_last_module') || 'arkusz';
-  Router.navigate(last);
+  Router.navigate(last === 'automaty' ? 'wro' : last);
 });
 
 function updateNavBadges() {

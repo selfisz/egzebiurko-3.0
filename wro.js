@@ -22,6 +22,7 @@ const WroModule = (() => {
   let _lookupIndex = null;
   let _wroFiltered = [];
   let _wroVirtRaf = 0;
+  let _zrzutniaBusy = false;
 
   /* ─── SYNCHRONIZACJA Z SZAFKĄ (majątek per teczka) ─────── */
   const MAJATEK_KEY = 'egze3_majatek_sync';
@@ -445,6 +446,18 @@ const WroModule = (() => {
               <input type="file" id="wro-file-input" accept=".js,.json,.txt" style="display:none">
             </label>
 
+            <div class="wro-zrzutnia">
+              <div class="wro-zrzutnia-title">Zrzutnia</div>
+              <button type="button" class="wro-zrzutnia-folder" id="wro-zrzutnia-btn">📂 Wskaż folder</button>
+              <input type="file" id="wro-zrzutnia-input" webkitdirectory directory multiple hidden>
+              <div class="wro-zrzutnia-files" id="wro-zrzutnia-files"></div>
+              <div class="wro-zrzutnia-runs">
+                <button type="button" onclick="WroModule.runZrzutnia('jpk')">JPK</button>
+                <button type="button" onclick="WroModule.runZrzutnia('ognivo')">OGNIVO</button>
+                <button type="button" onclick="WroModule.runZrzutnia('aum')">AUM</button>
+              </div>
+            </div>
+
             <button class="wro-cart-btn" style="background:#0f766e" onclick="WroModule.syncToSzafka()" title="Wgrane dane nie trafiają do Szafki automatycznie — dopiero po kliknięciu tutaj">
               🔄 Synchronizuj z Szafką
             </button>
@@ -483,7 +496,7 @@ const WroModule = (() => {
           <div class="wro-list" id="wro-list">
             <div class="wro-empty-list">
               Brak wczytanych danych.<br>
-              Wczytaj plik z bazą (.js) aby rozpocząć.
+              Wskaż folder zrzutni albo wczytaj bazę .js.
             </div>
           </div>
         </aside>
@@ -493,7 +506,7 @@ const WroModule = (() => {
             <div class="wro-empty-card">
               <div class="wro-empty-icon">📊</div>
               <h3>Analityka WRO</h3>
-              <p>Wczytaj plik bazy danych wygenerowany przez makro Excel, następnie wybierz podmiot z listy.</p>
+              <p>Wskaż folder zrzutni (SEE.11, SEE.18, AUM, Platforma, OGNIVO) i kliknij JPK / OGNIVO / AUM — wynik wejdzie na listę. Albo wczytaj gotową bazę .js z Excela.</p>
               ${Object.keys(bazaDanych).length > 0
                 ? `<p class="wro-db-info">✅ Baza załadowana: ${Object.keys(bazaDanych).length} podmiotów</p>`
                 : ''}
@@ -505,18 +518,52 @@ const WroModule = (() => {
 
     bindEvents();
     initFilters();
+    paintZrzutnia();
     if (entities.length > 0) renderList('');
     refreshSyncButtons();
+  }
+
+  function paintZrzutnia() {
+    const box = document.getElementById('wro-zrzutnia-files');
+    const btn = document.getElementById('wro-zrzutnia-btn');
+    if (!box || typeof AutomatyZrzutnia === 'undefined') return;
+    const snap = AutomatyZrzutnia.snapshot();
+    if (btn) {
+      btn.textContent = snap.folderName
+        ? ('📂 ' + snap.folderName)
+        : '📂 Wskaż folder';
+    }
+    box.innerHTML = AutomatyZrzutnia.ROLES.map(role => {
+      const ok = !!snap.found[role];
+      const label = AutomatyZrzutnia.ROLE_LABEL[role];
+      return `<span class="wro-zrzutnia-chip ${ok ? 'ok' : ''}" title="${ok ? escWro(snap.found[role]) : 'brak'}">${label}</span>`;
+    }).join('');
   }
 
   function bindEvents() {
     const fi   = document.getElementById('wro-file-input');
     const pi   = document.getElementById('wro-prog-input');
     const srch = document.getElementById('wro-search');
+    const zBtn = document.getElementById('wro-zrzutnia-btn');
+    const zIn  = document.getElementById('wro-zrzutnia-input');
 
     if (fi) fi.addEventListener('change', handleFileLoad);
     if (pi) pi.addEventListener('change', handleProgressLoad);
     if (srch) srch.addEventListener('input', e => renderList(e.target.value));
+    if (zBtn && zIn) {
+      zBtn.addEventListener('click', () => zIn.click());
+      zIn.addEventListener('change', e => {
+        if (typeof AutomatyZrzutnia === 'undefined') return;
+        const snap = AutomatyZrzutnia.ingest(e.target.files);
+        e.target.value = '';
+        paintZrzutnia();
+        if (!snap.count) {
+          showToast('W folderze nie ma SEE.11 / SEE.18 / AUM / Platforma / OGNIVO', 'warn');
+        } else {
+          showToast('Zrzutnia: ' + snap.count + ' plików', 'success');
+        }
+      });
+    }
 
     const dochInp = document.getElementById('wro-min-dochod');
     if (dochInp) dochInp.addEventListener('input', e => {
@@ -657,6 +704,34 @@ const WroModule = (() => {
     rebuildEntitiesFromBaza();
     persistBazaDanych();
     return { merged, created };
+  }
+
+  async function runZrzutnia(kind) {
+    if (_zrzutniaBusy) return;
+    if (typeof AutomatyZrzutnia === 'undefined') {
+      if (typeof showToast === 'function') showToast('Brak silnika zrzutni', 'error');
+      return;
+    }
+    _zrzutniaBusy = true;
+    try {
+      const result = await AutomatyZrzutnia.run(kind);
+      if (!result.ok) {
+        if (typeof showToast === 'function') showToast(result.error || 'Brak wyniku', 'warn');
+        return;
+      }
+      const stats = mergeWynikSection(result.sectionKey, result.byId);
+      initFilters();
+      renderList(document.getElementById('wro-search')?.value || '');
+      refreshSyncButtons();
+      const n = result.count || stats.merged;
+      if (typeof showToast === 'function') {
+        showToast(result.sectionKey + ': ' + n + ' w Analityce WRO', 'success');
+      }
+    } catch (e) {
+      if (typeof showToast === 'function') showToast((e && e.message) || 'Błąd zrzutni', 'error');
+    } finally {
+      _zrzutniaBusy = false;
+    }
   }
 
   function importBazaDanych(db, opts) {
@@ -1695,7 +1770,7 @@ const WroModule = (() => {
     renderCart, clearCart, exportProgress, exportMatrixCSV,
     expandAll, collapseAll,
     getCepikInfoForId, getAssetSummaryForPerson, findEntityKey,
-    getBazaDanych, importBazaDanych, mergeWynikSection, openInSzafka,
+    getBazaDanych, importBazaDanych, mergeWynikSection, runZrzutnia, openInSzafka,
     openAnnotPopover, showAnnotExcludeForm, setAnnotStatus,
     setMinDochod,
     syncToSzafka, reviewGoneQueue, goneDecision,
