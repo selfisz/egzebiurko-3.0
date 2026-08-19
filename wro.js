@@ -518,7 +518,7 @@ const WroModule = (() => {
             <div class="wro-empty-card">
               <div class="wro-empty-icon">📊</div>
               <h3>Analityka WRO</h3>
-              <p>Dwa foldery, jak w Excelu: <strong>zrzutnia</strong> (sita JPK/OGNIVO/AUM) i <strong>teczki WRO</strong> (~setki xlsx → jedna baza). Albo wczytaj gotowy <code>baza_danych.js</code>.</p>
+              <p>Dwa foldery, jak w Excelu: <strong>zrzutnia</strong> (sita JPK/OGNIVO/AUM) i <strong>teczki WRO</strong> (xlsx z 10 zakładkami, PESEL w CRP kol. B → jedna baza). Albo wczytaj gotowy <code>baza_danych.js</code>.</p>
               ${Object.keys(bazaDanych).length > 0
                 ? `<p class="wro-db-info">✅ Baza załadowana: ${Object.keys(bazaDanych).length} podmiotów</p>`
                 : ''}

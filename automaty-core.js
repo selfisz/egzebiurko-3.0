@@ -282,6 +282,16 @@
     return { col: col, row: parseInt(m[2], 10) };
   }
 
+  function expandSciCell(val) {
+    const s = String(val == null ? '' : val).trim();
+    if (!/^-?\d+(\.\d+)?e[+\-]?\d+$/i.test(s)) return s;
+    const n = Number(s);
+    if (!Number.isFinite(n)) return s;
+    const rounded = Math.round(n);
+    if (Math.abs(n - rounded) < 1e-6) return String(rounded);
+    return s;
+  }
+
   function parseSheetXml(xml, shared) {
     const rowsMap = new Map();
     let maxCol = 0;
@@ -312,7 +322,7 @@
         val = '';
       } else {
         const vM = inner.match(/<(?:[\w.]+:)?v\b[^>]*>([\s\S]*?)<\/(?:[\w.]+:)?v>/);
-        val = vM ? xmlUnescape(vM[1]) : '';
+        val = expandSciCell(vM ? xmlUnescape(vM[1]) : '');
       }
       if (!rowsMap.has(pos.row)) rowsMap.set(pos.row, new Map());
       rowsMap.get(pos.row).set(pos.col, val);
@@ -429,9 +439,16 @@
       .replace(/\s+/g, '');
   }
 
+  /* Teczka WRO (xlsx = ZIP+XML) — 10 zakładek, kolejność z eksportu:
+     1 CRPZakonczenie  2 NajwazniejsiKontrahenciReport  3 Stir  4 Raporter
+     5 Przychod  6 Dochody  7 Kw  8 Crcm  9 UfgCepik  10 Worksheet (śmieć)
+     PESEL jest TYLKO na CRPZakonczenie, kolumna B (wiersz nagłówków, potem dane).
+     Kolumna C na CRP to nazwisko i imię — nie identyfikator.
+     Stir / Raporter / Dochody mają NIP, nie PESEL dłużnika. */
   function wroSectionFromSheetName(name) {
     const compact = sheetNorm(name);
     if (!compact) return null;
+    if (compact === 'WORKSHEET' || compact === 'ARKUSZ1' || compact === 'SHEET1') return null;
     if (compact === 'RAPORTER') return 'Raporter';
     if (compact === 'STIR') return 'STIR';
     if (compact === 'KW' || compact.indexOf('KSIEGI') >= 0) return 'Księgi Wieczyste';
@@ -439,10 +456,10 @@
     if (compact === 'DOCHODY') return 'Dochody';
     if (compact.indexOf('PRZYCH') === 0) return 'Przychód';
     if (compact.indexOf('UFG') >= 0 || compact.indexOf('CEPIK') >= 0) return 'UFG CEPIK';
-    if (compact.indexOf('CRPZAKONCZENIE') >= 0) return '_crp';
+    if (compact.indexOf('CRPZAKONCZ') >= 0) return '_crp';
     if (compact.indexOf('SPRZEDAZ') >= 0 || compact.indexOf('SPRZEDA') >= 0) return 'Kontrahenci: SPRZEDAŻ';
     if (compact.indexOf('ZAKUP') >= 0) return 'Kontrahenci: ZAKUP';
-    if (compact.indexOf('KONTRAHENT') >= 0) return '_kontrahenci';
+    if (compact.indexOf('KONTRAHENC') >= 0) return '_kontrahenci';
     return null;
   }
 
@@ -474,58 +491,129 @@
     return m ? m[1] : '';
   }
 
-  function firstNonEmpty(rows, r1, c1) {
-    return cell((rows && rows[r1 - 1]) || [], c1);
+  function dropEmptyRows(rows) {
+    return (rows || []).filter(r => (r || []).some(c => String(c == null ? '' : c).trim() !== ''));
+  }
+
+  function stripTitleRow(rows) {
+    const t = dropEmptyRows(trimTable(rows));
+    if (!t.length) return t;
+    const r0 = t[0] || [];
+    const filled = r0.filter(c => String(c || '').trim()).length;
+    const a0 = getStr(r0[0]);
+    if (filled <= 2 && (/^raport\b/i.test(a0) || /^ufg\s*cepik$/i.test(a0))) return t.slice(1);
+    return t;
+  }
+
+  function isErrorOnlySheet(rows) {
+    const t = trimTable(rows);
+    if (!t.length) return true;
+    const blob = t.map(r => (r || []).join(' ')).join(' ').toLowerCase();
+    return /błąd systemu/.test(blob) && t.length <= 3;
+  }
+
+  function identityFromCrp(rows) {
+    const table = trimTable(rows);
+    let headerIdx = -1;
+    let peselCol = 1;
+    let nipCol = 0;
+    let nameCol = 2;
+    let fallback = null;
+    for (let i = 0; i < Math.min(8, table.length); i++) {
+      const row = table[i] || [];
+      let p = -1;
+      let n = -1;
+      let nm = -1;
+      for (let c = 0; c < row.length; c++) {
+        const h = getStr(row[c]).replace(/\s+/g, ' ').trim();
+        if (/^PESEL$/i.test(h)) p = c;
+        if (/^NIP$/i.test(h)) n = c;
+        if (/^nazwa/i.test(h)) nm = c;
+      }
+      if (p >= 0 && n >= 0) {
+        headerIdx = i;
+        peselCol = p;
+        nipCol = n;
+        if (nm >= 0) nameCol = nm;
+        break;
+      }
+      if (!fallback && p >= 0) {
+        fallback = { i, p, n, nm };
+      }
+    }
+    if (headerIdx < 0 && fallback) {
+      headerIdx = fallback.i;
+      peselCol = fallback.p;
+      if (fallback.n >= 0) nipCol = fallback.n;
+      if (fallback.nm >= 0) nameCol = fallback.nm;
+    }
+    if (headerIdx < 0) headerIdx = 0;
+    let pesel = '';
+    let nip = '';
+    let name = '';
+    for (let i = headerIdx + 1; i < table.length; i++) {
+      const p = cleanPESEL(table[i][peselCol]);
+      const n = cleanNIP(table[i][nipCol]);
+      if (!p && !n) continue;
+      pesel = p;
+      nip = n;
+      name = getStr(table[i][nameCol]);
+      break;
+    }
+    return { pesel, nip, name };
   }
 
   function splitKontrahenci(rows) {
-    const table = trimTable(rows);
-    if (table.length < 2) return {};
-    const headers = (table[0] || []).map(h => getStr(h).toLowerCase());
-    const idx = headers.findIndex(h => /sprzeda|zakup|kierunek|strona|typ/.test(h));
-    if (idx < 0) return { 'Kontrahenci: SPRZEDAŻ': table };
-    const sprzedaz = [table[0]];
-    const zakup = [table[0]];
-    for (let i = 1; i < table.length; i++) {
-      const v = getStr(table[i][idx]).toUpperCase();
-      if (/ZAKUP/.test(v)) zakup.push(table[i]);
-      else sprzedaz.push(table[i]);
+    const table = dropEmptyRows(trimTable(rows));
+    if (!table.length) return {};
+    let zakupStart = -1;
+    for (let i = 0; i < table.length; i++) {
+      const line = (table[i] || []).map(getStr).join(' ').toLowerCase();
+      if (/nip\s*odbior/.test(line)) {
+        zakupStart = i;
+        break;
+      }
     }
     const out = {};
-    if (sprzedaz.length > 1) out['Kontrahenci: SPRZEDAŻ'] = sprzedaz;
-    if (zakup.length > 1) out['Kontrahenci: ZAKUP'] = zakup;
+    if (zakupStart > 0) {
+      const sprzedaz = stripTitleRow(table.slice(0, zakupStart));
+      const zakup = dropEmptyRows(trimTable(table.slice(zakupStart)));
+      if (sprzedaz.length > 1) out['Kontrahenci: SPRZEDAŻ'] = sprzedaz;
+      if (zakup.length > 1) out['Kontrahenci: ZAKUP'] = zakup;
+    } else if (table.length > 1) {
+      out['Kontrahenci: SPRZEDAŻ'] = stripTitleRow(table);
+    }
     return out;
   }
 
   function dossierFromWorkbook(fileName, workbook) {
     const sheets = (workbook && workbook.sheets) || {};
     const order = (workbook && workbook.sheetOrder) || Object.keys(sheets);
-    const firstName = order[0];
-    const first = sheets[firstName] || [];
     let crp = [];
     Object.keys(sheets).forEach(n => {
       if (wroSectionFromSheetName(n) === '_crp') crp = sheets[n] || [];
     });
-    const fromCrp = cleanCyfry(firstNonEmpty(crp, 3, 3));
+    const ident = identityFromCrp(crp);
     const fromFile = idFromFilename(fileName);
-    const a3 = cleanNIP(firstNonEmpty(first, 3, 1));
-    const b3 = cleanPESEL(firstNonEmpty(first, 3, 2)) || (cleanCyfry(firstNonEmpty(first, 3, 2)).length === 11 ? cleanCyfry(firstNonEmpty(first, 3, 2)) : '');
-    const id = fromCrp || b3 || a3 || fromFile || fileName;
+    const id = ident.pesel || ident.nip || fromFile || fileName;
     const entity = {
       _meta: {
-        a3: a3,
-        b3: b3,
+        a3: ident.nip,
+        b3: ident.pesel,
+        name: ident.name,
         plik: String(fileName || '').split(/[/\\]/).pop()
       }
     };
     order.forEach(n => {
       const section = wroSectionFromSheetName(n);
       if (!section || section === '_crp') return;
-      const table = trimTable(sheets[n]);
+      const raw = sheets[n] || [];
+      if (isErrorOnlySheet(raw)) return;
       if (section === '_kontrahenci') {
-        Object.assign(entity, splitKontrahenci(table));
+        Object.assign(entity, splitKontrahenci(raw));
         return;
       }
+      const table = dropEmptyRows(stripTitleRow(raw));
       if (table.length > 1) entity[section] = table;
     });
     return { id, entity };
@@ -1388,6 +1476,7 @@
     detectAumLayout,
     splitAumAccounts,
     wroSectionFromSheetName,
+    identityFromCrp,
     dossierFromWorkbook,
     actionRowsById,
     buildWroBaza,

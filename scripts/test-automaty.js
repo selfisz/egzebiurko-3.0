@@ -234,27 +234,73 @@ eq(C.wroSectionFromSheetName('Stir'), 'STIR', 'arkusz STIR');
 eq(C.wroSectionFromSheetName('Kw'), 'Księgi Wieczyste', 'arkusz Kw');
 eq(C.wroSectionFromSheetName('UfgCepik'), 'UFG CEPIK', 'arkusz UFG');
 eq(C.wroSectionFromSheetName('CRPZakonczenie'), '_crp', 'arkusz CRP');
+eq(C.wroSectionFromSheetName('CRPZakończenie'), '_crp', 'arkusz CRP z ogonkiem');
+eq(C.wroSectionFromSheetName('CRPZakonczene'), '_crp', 'arkusz CRP bez i');
+eq(C.wroSectionFromSheetName('NajwazniejsiKontrahenciReport'), '_kontrahenci', 'Kontrahenci (liczba mnoga)');
+eq(C.wroSectionFromSheetName('Worksheet'), null, 'pusty Worksheet pomijany');
+
+const crpIdent = C.identityFromCrp([
+  ['Raport CRP Status'],
+  ['NIP', 'PESEL', 'Nazwa po', 'Data końca'],
+  ['1111111111', '90010112345', 'Kowalski Jan', '2026-01-01']
+]);
+eq(crpIdent.pesel, '90010112345', 'CRP: PESEL z kolumny B');
+eq(crpIdent.nip, '1111111111', 'CRP: NIP z kolumny A');
+eq(crpIdent.name, 'Kowalski Jan', 'CRP: C to nazwisko, nie ID');
+
+const crpIdentSci = C.identityFromCrp([
+  ['Raport CRP Status'],
+  ['NIP', 'PESEL', 'Nazwa po'],
+  ['1111111111', '9.0010112345e+10', 'Kowalski Jan']
+]);
+eq(crpIdentSci.pesel, '90010112345', 'CRP: PESEL z notacji naukowej Excela');
 
 const dossierWb = {
-  sheetOrder: ['Okladka', 'Raporter', 'STIR', 'CRPZakonczenie'],
+  sheetOrder: ['CRPZakonczenie', 'NajwazniejsiKontrahenciReport', 'Stir', 'Raporter', 'Przychod', 'Dochody', 'Kw', 'Crcm', 'UfgCepik', 'Worksheet'],
   sheets: {
-    Okladka: [
-      ['x'],
-      ['x'],
-      ['1111111111', '90010112345']
+    CRPZakonczenie: [
+      ['Raport CRP Status'],
+      ['NIP', 'PESEL', 'Nazwa po', 'Data końca'],
+      ['1111111111', '90010112345', 'Kowalski Jan', '2026-01-01']
+    ],
+    NajwazniejsiKontrahenciReport: [
+      ['NR KONTRAHENTA', 'Nazwa kontrahenta', 'LICZBA FA', 'WARTOŚĆ LICZBA FA', 'WARTOŚĆ SPRZEDAŻY SUMA 202607 (opcja)'],
+      ['1', 'Firma A', '3', '1200', '5000'],
+      [],
+      [],
+      ['NIP odbiorcy z JPK_V', 'Nazwa odbiorcy', 'Kwota netto', 'Kwota net', 'Kwota net', 'Kwota netto pozost. 202607 (opcja)'],
+      ['9876543210', 'Odbiorca B', '100', '100', '100', '0']
+    ],
+    Stir: [
+      ['Raport Stir'],
+      ['NIP', 'NAZWA', 'NUMER RACHUNKU', 'DATA OTW', 'SALDO RACHUNKU', 'WALUTA'],
+      ['1111111111', 'Kowalski', '22105014400000000000000000', '2019-02-14', '0.16', 'PLN']
     ],
     Raporter: [
-      ['Kol1', 'Kol2'],
-      ['a', 'b']
+      ['NIP', 'Typ obiektu', 'Numer rachunku', 'Wartość transakcji', 'Kod waluty', 'Rok miesiąc'],
+      ['1111111111', 'Powszech Terminal', 'PL11', '8830 PLN', 'PLN', '202607']
     ],
-    STIR: [
-      ['Rachunek'],
-      ['PL00']
+    Przychod: [
+      ['Raport Przychód'],
+      ['Kod formi Przychód : Przychód : Przychód 2026']
     ],
-    CRPZakonczenie: [
-      [],
-      [],
-      ['', '', '90010112345']
+    Dochody: [
+      ['ŹRÓDŁO', 'NIP PŁATNIKA', 'NAZWA PŁATNIKA', 'PRZYCHÓD', 'DOCHÓD I STRATA', 'MAŁŻONEK SUMA'],
+      ['PIT-11', '5220000000', 'ZBIGNIEW', '80000', '60000', '0']
+    ],
+    Kw: [
+      ['błąd systemu źródłowego KW: błąd systemu źródłowego dla wyszukania po PESEL błąd systemu źródłowego dla wyszukania po REGON']
+    ],
+    Crcm: [
+      ['', 'Id Crcm', '', 'Data czynności', 'Przedmiot Strona czynności'],
+      ['', '13285', '', '1.15E+08', 'AKT NOTA 2023-05-11 GRUNTY Z ZBYWCA']
+    ],
+    UfgCepik: [
+      ['UFG CEPIK', 'Id', 'Numer VIN', 'Nr rejstr', 'Model', 'Marka', 'Przegląd', 'Współwła'],
+      ['', '18885', 'VF3', 'KRA290EJ', '206', 'PEUGEOT', 'Aktualne', 'ANNA BIE']
+    ],
+    Worksheet: [
+      ['śmieć']
     ]
   }
 };
@@ -275,13 +321,24 @@ const built = C.buildWroBaza({
     }
   }]
 });
-assert(built['90010112345'], 'baza: teczka po C3/PESEL');
+assert(built['90010112345'], 'baza: teczka po PESEL z CRP kol. B');
 assert(built['90010112345']['Raporter'] && built['90010112345']['Raporter'].length === 2, 'baza: Raporter');
-assert(built['90010112345']['STIR'], 'baza: STIR');
+assert(built['90010112345']['STIR'] && built['90010112345']['STIR'][0][0] === 'NIP', 'baza: STIR bez wiersza Raport');
+eq(built['90010112345']['STIR'][0][2], 'NUMER RACHUNKU', 'baza: STIR kolumna C = rachunek, nie PESEL');
+assert(Object.keys(built['90010112345']).some(k => /SPRZEDA/i.test(k)), 'baza: sprzedaż z kontrahentów');
+assert(Object.keys(built['90010112345']).some(k => /ZAKUP/i.test(k)), 'baza: zakup od NIP odbiorcy');
+assert(!built['90010112345']['Księgi Wieczyste'], 'baza: Kw z błędem systemu pominięte');
+assert(!built['90010112345']['Przychód'], 'baza: pusty Przychód (sam tytuł) pominięty');
+assert(built['90010112345']['Dochody'] && /PIT-11/.test(built['90010112345']['Dochody'][1][0]), 'baza: Dochody PIT');
+assert(built['90010112345']['CRCM'] && built['90010112345']['CRCM'][1][1] === '13285', 'baza: CRCM');
+assert(built['90010112345']['UFG CEPIK'] && /KRA290EJ/.test(built['90010112345']['UFG CEPIK'][1].join(' ')), 'baza: UfgCepik pojazd');
+assert(!built['90010112345']['Worksheet'], 'baza: Worksheet nie wchodzi do podmiotu');
 assert(built['90010112345']['Wynik: OGNIVO'] && built['90010112345']['Wynik: OGNIVO'].length === 2, 'baza: OGNIVO wstrzyknięte do teczki');
 assert(built['85051267890'] && built['85051267890']['Wynik: OGNIVO'], 'baza: stub dla OGNIVO bez teczki');
-eq(built['90010112345']._meta.a3, '1111111111', 'meta A3 = NIP');
-eq(built['90010112345']._meta.b3, '90010112345', 'meta B3 = PESEL');
+eq(built['90010112345']._meta.a3, '1111111111', 'meta NIP z CRP A');
+eq(built['90010112345']._meta.b3, '90010112345', 'meta PESEL z CRP B');
+eq(built['90010112345']._meta.name, 'Kowalski Jan', 'meta nazwa z CRP C');
+assert(built['90010112345']['Dochody'][1][1] === '5220000000', 'Dochody: NIP płatnika nie podmienia ID teczki');
 
 /* ── XLSX pierwszy arkusz ────────────────────────────────── */
 function crc32(u8) {
