@@ -542,47 +542,6 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
   text-align:center;transition:.15s;
 }
 .wro-upload-btn:hover{background:var(--accent2)}
-.wro-zrzutnia{
-  background:rgba(255,255,255,.05);
-  border:1px solid rgba(255,255,255,.08);
-  border-radius:8px;padding:10px;
-}
-.wro-zrzutnia-title{
-  font-size:.68rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
-  color:#8ba7c5;margin-bottom:8px;
-}
-.wro-zrzutnia-folder{
-  display:block;width:100%;background:rgba(255,255,255,.08);color:#e7eef8;
-  border:1px solid rgba(255,255,255,.1);border-radius:7px;
-  padding:8px 10px;font:inherit;font-size:.8rem;font-weight:600;
-  cursor:pointer;text-align:center;
-}
-.wro-zrzutnia-folder:hover{background:rgba(255,255,255,.14)}
-.wro-zrzutnia-files{display:flex;flex-wrap:wrap;gap:4px;margin:8px 0 0}
-.wro-zrzutnia-chip{
-  font-size:.68rem;padding:2px 7px;border-radius:999px;
-  background:rgba(255,255,255,.06);color:#6b849c;
-  border:1px solid rgba(255,255,255,.06);
-}
-.wro-zrzutnia-chip.ok{color:#bbf7d0;border-color:rgba(187,247,208,.25);background:rgba(16,185,129,.12)}
-.wro-zrzutnia-runs{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:8px}
-.wro-zrzutnia-runs button{
-  background:#1a2332;color:#e7eef8;border:1px solid rgba(255,255,255,.12);
-  border-radius:7px;padding:7px 4px;font:inherit;font-size:.75rem;font-weight:700;
-  cursor:pointer;
-}
-.wro-zrzutnia-runs button:hover{background:var(--accent);border-color:var(--accent);color:#fff}
-.wro-zrzutnia-runs button:disabled{opacity:.45;cursor:default}
-.wro-zrzutnia-build{
-  display:block;width:100%;margin-top:8px;
-  background:var(--accent);color:#fff;border:none;border-radius:7px;
-  padding:8px 10px;font:inherit;font-size:.8rem;font-weight:700;cursor:pointer;
-}
-.wro-zrzutnia-build:hover{background:var(--accent2)}
-.wro-zrzutnia-prog{margin-top:8px}
-.wro-zrzutnia-bar{height:6px;background:rgba(255,255,255,.1);border-radius:99px;overflow:hidden}
-.wro-zrzutnia-bar span{display:block;height:100%;width:0;background:#34d399;transition:width .15s}
-.wro-zrzutnia-prog-txt{font-size:.7rem;color:#8ba7c5;margin-top:4px}
 .wro-progress-row{display:flex;gap:8px}
 .wro-prog-btn{
   flex:1;background:rgba(255,255,255,.08);color:#c5d8f0;
@@ -1764,8 +1723,6 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
 <script src="nav-context.js"></script>
 <script src="zobowiazani.js"></script>
 <script src="ognivo.js"></script>
-<script src="automaty-core.js"></script>
-<script src="automaty.js"></script>
 <script src="wro.js"></script>
 <script src="rozliczenia.js"></script>
 <script src="przelew.js"></script>
@@ -1795,7 +1752,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Załaduj ostatni widok lub Arkusz
   const last = localStorage.getItem('egze3_last_module') || 'arkusz';
-  Router.navigate(last === 'automaty' ? 'wro' : last);
+  Router.navigate(last);
 });
 
 function updateNavBadges() {
