@@ -1465,6 +1465,43 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
 .zob-vehicle .wro-card{
   margin:0; border:1px solid var(--zob-edge); border-radius:8px; overflow:hidden; background:#fff;
 }
+.zob-maj-caps{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.zob-maj-cap{
+  font:inherit; font-size:.76rem; font-weight:650; cursor:pointer;
+  border:1px solid var(--zob-edge); background:var(--zob-cream); color:var(--zob-ink);
+  border-radius:999px; padding:5px 10px; display:inline-flex; align-items:center; gap:6px;
+}
+.zob-maj-cap span{font-size:.65rem; font-weight:700; opacity:.7}
+.zob-maj-cap:hover{border-color:var(--zob-spine); background:#fff}
+.zob-maj-sec{
+  border:1px solid var(--zob-edge); border-radius:12px; background:var(--zob-cream);
+  overflow:hidden;
+}
+.zob-maj-sec + .zob-maj-sec{margin-top:10px}
+.zob-maj-sec-hd{
+  width:100%; display:flex; align-items:center; justify-content:space-between; gap:10px;
+  font:inherit; text-align:left; cursor:pointer;
+  border:0; background:color-mix(in srgb, var(--zob-paper2) 55%, var(--zob-cream));
+  color:var(--zob-ink); padding:10px 12px;
+}
+.zob-maj-sec-hd:hover{background:color-mix(in srgb, var(--zob-paper2) 80%, #fff)}
+.zob-maj-sec-left{font-weight:700; display:flex; align-items:center; gap:6px; flex-wrap:wrap}
+.zob-maj-sec-right{display:flex; align-items:center; gap:8px; min-width:0; color:var(--zob-ink-soft)}
+.zob-maj-sec-preview{
+  font-size:.72rem; max-width:min(360px, 42vw); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.zob-maj-arrow{font-size:.7rem; transition:transform .15s; display:inline-block}
+.zob-maj-sec:not(.open) .zob-maj-arrow{transform:rotate(-90deg)}
+.zob-maj-sec:not(.open) .zob-maj-sec-body{display:none}
+.zob-maj-sec-body{padding:10px 12px 12px; display:flex; flex-direction:column; gap:10px}
+.zob-maj-sec-meta{display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:.72rem; color:var(--zob-ink-soft)}
+.zob-maj-sec .wro-card{
+  margin:0; border:1px solid var(--zob-edge); border-radius:8px; overflow:hidden;
+  background:#fff; box-shadow:none;
+}
+.zob-maj-sec .wro-label{color:var(--zob-ink-soft)}
+.zob-maj-sec .wro-value{color:var(--zob-ink)}
+.zob-maj-sec .zob-vehicle-sum{align-items:flex-start}
 .zob-asset-list{display:flex;flex-direction:column;gap:8px}
 .zob-asset-tile{
   display:flex; align-items:center; gap:12px; width:100%; text-align:left;
