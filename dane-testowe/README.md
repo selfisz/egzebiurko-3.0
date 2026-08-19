@@ -61,3 +61,27 @@ trafić do kolejki **„⚠️ Przegląd zniknięć”** z pytaniem Archiwizuj /
 To są **w 100% fikcyjne dane** (imiona, PESEL, NIP, adresy, kwoty) — nie odpowiadają
 żadnym realnym osobom czy sprawom. Numery PESEL/NIP nie mają poprawnej sumy kontrolnej,
 ale aplikacja i tak dopasowuje wyłącznie po cyfrach, więc to nie ma znaczenia dla testów.
+
+## Zrzutnia w Analityce WRO
+
+W **Analityce WRO** są dwa foldery, jak w Excelu:
+
+1. **Zrzutnia** — SEE.11 / SEE.18 / AUM / Platforma / OGNIVO CSV → przycisk JPK, OGNIVO albo AUM.
+2. **Teczki WRO** — folder z ~setkami xlsx osób (to, co makro `GenerujBazeDlaHTML` czytało z `_WRO`) → **Zbuduj bazę WRO**.
+
+Wynik sit i teczek ląduje na tej samej liście. Potem **Synchronizuj z Szafką**.
+
+Mini-zestaw (fikcyjne PESEL-e z bazy 15 osób):
+
+| Plik | Rola |
+|---|---|
+| `ognivo-sita.csv` | wynik OGNIVO (A podmiot, B PESEL, D banki) |
+| `see11-sita.csv` | SEE.11 (C klasyfikacja, F NIP, G PESEL, N klasyfikacja) |
+| `see18-sita.csv` | SEE.18 (H PESEL, K klasyfikacja, L bank/wierzyciel) |
+| `platforma-sita.csv` | Platforma do sita JPK |
+| `aum-sita.csv` | AUM (PESEL + rachunki w kolumnie F, rozdzielane `·`) |
+
+Oczekiwany **OGNIVO** i **AUM**: Anna Nowak (nowy Pekao) i Jan Kowalski (mBank,
+bo w SEE.18 ma K=W). Odrzut C=T / N=W1 / brak w SEE.11 nie przechodzą.
+
+Oczekiwany **JPK**: jeden wiersz NIP `1111111111`.
