@@ -13,6 +13,7 @@ const WroModule = (() => {
   let entities   = [];
   let activeFilters = new Set();
   let filterNoFolder = false;
+  let filterFirstSeen = false;
   let currentActiveId = null;
   let activated   = false;
   let _currentAnnotBid = null;
@@ -35,11 +36,15 @@ const WroModule = (() => {
       if (v && typeof v === 'object') {
         if (!v.people || typeof v.people !== 'object') v.people = {};
         if (!Array.isArray(v.pendingGone)) v.pendingGone = [];
+        if (!Array.isArray(v.lastNewInFileKeys)) v.lastNewInFileKeys = [];
+        if (!Array.isArray(v.lastAddedKeys)) v.lastAddedKeys = [];
+        if (!Array.isArray(v.lastFileKeys)) v.lastFileKeys = [];
+        if (typeof v.firstSeenMode !== 'string') v.firstSeenMode = '';
         _majatekMem = v;
         return v;
       }
     } catch {}
-    _majatekMem = { people: {}, pendingGone: [] };
+    _majatekMem = { people: {}, pendingGone: [], lastNewInFileKeys: [], lastAddedKeys: [], lastFileKeys: [], firstSeenMode: '' };
     return _majatekMem;
   }
   function saveMajatekStore(store) {
@@ -130,17 +135,103 @@ const WroModule = (() => {
   function getSourceCatalog() {
     return matrixColumns.map(k => ({ key: k, icon: icons[k] || '📄', safe: k.replace(/[^a-zA-Z0-9]/g, ''), label: k.replace('Wynik: ', '') }));
   }
+  function collectPersonKeysFromDb(db) {
+    const keys = new Set();
+    Object.keys(db || {}).forEach(id => {
+      const data = db[id] || {};
+      const meta = data._meta || {};
+      const fromT = idsFromWroTables(data);
+      const a3 = digitsId(meta.a3) || digitsId(fromT.nip);
+      const b3 = digitsId(meta.b3) || digitsId(fromT.pesel);
+      const iid = digitsId(id);
+      if (b3) keys.add(b3);
+      if (a3) keys.add(a3);
+      if (iid) keys.add(iid);
+    });
+    return keys;
+  }
+
+  function addKeysToSet(target, arr) {
+    (arr || []).forEach(k => {
+      const d = digitsId(k);
+      if (d) target.add(d);
+    });
+  }
+
+  function baselinePersonKeys(prevDb) {
+    const prev = collectPersonKeysFromDb(prevDb);
+    const store = loadMajatekStore();
+    Object.keys(store.people || {}).forEach(k => {
+      const d = digitsId(k);
+      if (d) prev.add(d);
+    });
+    addKeysToSet(prev, store.lastFileKeys);
+    return prev;
+  }
+
+  function firstSeenKeySet() {
+    const store = loadMajatekStore();
+    const file = store.lastNewInFileKeys || [];
+    const raw = file.length
+      ? file
+      : (store.firstSeenMode === 'sync' ? (store.lastAddedKeys || []) : []);
+    const out = new Set();
+    addKeysToSet(out, raw);
+    return out;
+  }
+
+  function getFirstSeenStamp() {
+    const s = loadMajatekStore();
+    return [s.lastFirstSeenAt || '', (s.lastNewInFileKeys || []).length, (s.lastAddedKeys || []).length, s.firstSeenMode || ''].join(':');
+  }
+
+  function isFirstSeenPerson(personKey) {
+    const pk = digitsId(personKey);
+    return !!(pk && firstSeenKeySet().has(pk));
+  }
+
+  function recordNewInFile(prevDb, nextDb) {
+    const prev = baselinePersonKeys(prevDb);
+    const next = collectPersonKeysFromDb(nextDb);
+    const first = [];
+    if (prev.size) {
+      next.forEach(pk => {
+        if (!prev.has(pk)) first.push(pk);
+      });
+    }
+    const store = loadMajatekStore();
+    store.lastFileKeys = [...next];
+    store.lastNewInFileKeys = first;
+    store.lastAddedKeys = [];
+    store.firstSeenMode = first.length ? 'file' : '';
+    store.lastFirstSeenAt = new Date().toISOString();
+    saveMajatekStore(store);
+    return first;
+  }
+
   function getPersonWroFlags(personKey) {
     const pk = digitsId(personKey);
-    if (!pk) return { sources: [], dochodMax: 0, pending: false };
+    const firstSeen = isFirstSeenPerson(pk);
+    if (!pk) return { sources: [], dochodMax: 0, pending: false, firstSeen: false };
     const snap = getMajatekSnapshot(pk);
-    if (!snap || !snap.sections) return { sources: [], dochodMax: 0, pending: false };
+    if (!snap || !snap.sections) return { sources: [], dochodMax: 0, pending: false, firstSeen };
     const suspended = typeof ZobowiazaniModule !== 'undefined' && typeof ZobowiazaniModule.isSuspended === 'function' && ZobowiazaniModule.isSuspended(pk);
     return {
       sources: Object.keys(snap.sections),
       dochodMax: snap.dochodMax || 0,
       pending: suspended ? false : sectionsHavePending(pk, snap.sections, snap.entityId),
+      firstSeen
     };
+  }
+
+  function filterFirstSeenOnly() {
+    filterFirstSeen = true;
+    const chip = document.getElementById('wro-chip-first');
+    if (chip) chip.classList.add('active');
+    renderList(document.getElementById('wro-search')?.value || '');
+    if (typeof ZobowiazaniModule !== 'undefined' && typeof ZobowiazaniModule.setFilter === 'function') {
+      ZobowiazaniModule.setFilter('wro_first');
+    }
   }
 
   function syncToSzafka() {
@@ -154,8 +245,10 @@ const WroModule = (() => {
     }
     const idIndex = ZobowiazaniModule.getIdIndex();
     const store = loadMajatekStore();
+    const hadPeopleBefore = Object.keys(store.people || {}).length > 0;
     let addedN = 0, updatedN = 0, newsN = 0;
     const missingList = [];
+    const addedKeys = [];
 
     entities.forEach(({ id }) => {
       const pk = personKeyForEntity(id);
@@ -189,15 +282,36 @@ const WroModule = (() => {
         : (prev ? (prev.dochodMax || 0) : 0);
 
       store.people[pk] = { entityId: id, lastSyncAt: new Date().toISOString(), sections, dochodMax };
-      if (prev) updatedN++; else addedN++;
+      if (prev) updatedN++;
+      else {
+        addedN++;
+        addedKeys.push(pk);
+      }
 
       const suspended = typeof ZobowiazaniModule.isSuspended === 'function' && ZobowiazaniModule.isSuspended(pk);
       if (!suspended && sectionsHavePending(pk, sections, id)) newsN++;
     });
 
+    const fileNew = store.lastNewInFileKeys && store.lastNewInFileKeys.length;
+    if (fileNew) {
+      store.lastAddedKeys = addedKeys;
+    } else if (hadPeopleBefore) {
+      store.lastAddedKeys = addedKeys;
+      store.firstSeenMode = addedKeys.length ? 'sync' : '';
+    } else {
+      store.lastAddedKeys = [];
+    }
+    store.lastFirstSeenAt = new Date().toISOString();
     saveMajatekStore(store);
     if (typeof ZobowiazaniModule !== 'undefined' && ZobowiazaniModule.refreshAfterWroSync) ZobowiazaniModule.refreshAfterWroSync();
-    showSyncSummaryDialog({ added: addedN, updated: updatedN, missing: missingList, news: newsN, goneCount: store.pendingGone.length });
+    showSyncSummaryDialog({
+      added: addedN,
+      updated: updatedN,
+      missing: missingList,
+      news: newsN,
+      goneCount: store.pendingGone.length,
+      firstSeen: firstSeenKeySet().size
+    });
   }
 
   let _lastMissingList = [];
@@ -232,8 +346,10 @@ const WroModule = (() => {
             <div class="wro-ldlg-card wro-ldlg-partial"><div class="wro-ldlg-num">${summary.missing.length}</div><div class="wro-ldlg-lbl">📂 brakuje teczki</div></div>
           </div>
           ${missHtml}
+          ${summary.firstSeen > 0 ? `<div class="wro-ldlg-note wro-ldlg-first">🆕 ${summary.firstSeen} osób bez wcześniejszego wpisu (nowe względem poprzedniego raportu / Szafki). To nie to samo co 🔥 nowość — tam są niezałatwione adnotacje.</div>` : ''}
           ${summary.goneCount > 0 ? `<div class="wro-ldlg-note wro-ldlg-first">⚠️ ${summary.goneCount} zniknięć do przeglądu — dane, które osoba miała wcześniej, a już ich nie ma w tym raporcie.</div>` : ''}
           <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
+            ${summary.firstSeen > 0 ? `<button class="wro-ldlg-close" style="flex:1;background:#0f766e" onclick="document.getElementById('wro-sync-dlg').style.display='none';WroModule.filterFirstSeenOnly()">Pokaż bez wcześniejszego wpisu (${summary.firstSeen})</button>` : ''}
             ${summary.goneCount > 0 ? `<button class="wro-ldlg-close" style="flex:1;background:#b45309" onclick="document.getElementById('wro-sync-dlg').style.display='none';WroModule.reviewGoneQueue()">Przejrzyj zniknięcia (${summary.goneCount})</button>` : ''}
             ${summary.missing.length > 0 ? `<button class="wro-ldlg-close" style="flex:1;background:#475569" onclick="document.getElementById('wro-sync-dlg').style.display='none';WroModule.filterMissingFolders()">Filtruj listę: bez teczki</button>` : ''}
             <button class="wro-ldlg-close" style="flex:1" onclick="document.getElementById('wro-sync-dlg').style.display='none'">Zamknij</button>
@@ -714,8 +830,12 @@ const WroModule = (() => {
             </div>
           </div>
           ${noActionSections > 0 ? `<div class="wro-ldlg-note">${noActionSections} podmiotów bez sekcji wynikowych (OGNIVO/AUM/JPK)</div>` : ''}
+          ${summary.firstSeen > 0 ? `<div class="wro-ldlg-note wro-ldlg-first">🆕 ${summary.firstSeen} osób nie miało wcześniej wpisu — nie było ich w poprzedniej bazie ani w Majątku Szafki. To nie filtr 🔥 Nowość WRO (niezałatwione adnotacje).</div>` : ''}
           ${!hasAnyAnnot ? `<div class="wro-ldlg-note wro-ldlg-first">ℹ️ Brak zapisanych adnotacji — to pierwsze wczytanie lub nowe urządzenie. Oznaczaj wpisy statusami aby przy kolejnym wczytaniu system pokazał delta.</div>` : ''}
-          <button class="wro-ldlg-close" onclick="document.getElementById('wro-load-dlg').style.display='none'">Zamknij</button>
+          <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
+            ${summary.firstSeen > 0 ? `<button class="wro-ldlg-close" style="flex:1;background:#0f766e" onclick="document.getElementById('wro-load-dlg').style.display='none';WroModule.filterFirstSeenOnly()">Pokaż tylko bez wcześniejszego wpisu (${summary.firstSeen})</button>` : ''}
+            <button class="wro-ldlg-close" style="flex:1" onclick="document.getElementById('wro-load-dlg').style.display='none'">Zamknij</button>
+          </div>
         </div>
       </div>
     `;
@@ -731,15 +851,23 @@ const WroModule = (() => {
       let text = evt.target.result.replace('const bazaDanych = ', '').trim();
       if (text.endsWith('};')) text = text.slice(0, -2) + '}';
       try {
-        bazaDanych = JSON.parse(text);
+        const nextDb = JSON.parse(text);
+        const first = recordNewInFile(bazaDanych, nextDb);
+        bazaDanych = nextDb;
         window.WroDatabase = bazaDanych;
         rebuildEntitiesFromBaza();
         persistBazaDanych();
 
         renderList('');
         showContent('<div class="wro-empty-state"><div class="wro-empty-card"><div class="wro-empty-icon">✅</div><h3>Baza załadowana</h3><p>Załadowano ' + entities.length + ' podmiotów. Wybierz podmiot z listy.</p></div></div>');
-        showToast('✅ Wczytano bazę WRO: ' + entities.length + ' podmiotów', 'success');
-        showLoadSummaryDialog(computeLoadSummary());
+        showToast(
+          first.length
+            ? ('✅ Wczytano bazę WRO: ' + entities.length + ' podmiotów · 🆕 ' + first.length + ' bez wcześniejszego wpisu')
+            : ('✅ Wczytano bazę WRO: ' + entities.length + ' podmiotów'),
+          'success'
+        );
+        if (typeof ZobowiazaniModule !== 'undefined' && ZobowiazaniModule.refreshAfterWroSync) ZobowiazaniModule.refreshAfterWroSync();
+        showLoadSummaryDialog({ ...computeLoadSummary(), firstSeen: first.length });
       } catch(err) {
         showToast('❌ Błąd pliku bazy danych!', 'error');
       }
@@ -785,6 +913,17 @@ const WroModule = (() => {
       renderList(document.getElementById('wro-search')?.value || '');
     };
     fc.appendChild(noFolderChip);
+    const firstChip = document.createElement('div');
+    firstChip.id = 'wro-chip-first';
+    firstChip.className = 'wro-chip wro-chip-first' + (filterFirstSeen ? ' active' : '');
+    firstChip.innerHTML = '🆕 Bez wcześniejszego wpisu';
+    firstChip.title = 'Osoby z wczytanego raportu, których nie było w poprzedniej bazie ani w Majątku Szafki. To nie to samo co 🔥 Nowość WRO (niezałatwione adnotacje).';
+    firstChip.onclick = () => {
+      filterFirstSeen = !filterFirstSeen;
+      firstChip.classList.toggle('active', filterFirstSeen);
+      renderList(document.getElementById('wro-search')?.value || '');
+    };
+    fc.appendChild(firstChip);
     sourceNames.forEach(src => {
       const chip = document.createElement('div');
       chip.className = 'wro-chip';
@@ -829,6 +968,7 @@ const WroModule = (() => {
         item._view = view;
         if (view.person) return false;
       }
+      if (filterFirstSeen && !isFirstSeenPerson(personKeyForEntity(item.id))) return false;
       if (!lf) return true;
       const view = item._view || resolveEntityView(item.id, arkIndex);
       item._view = view;
@@ -851,6 +991,9 @@ const WroModule = (() => {
     const view = item._view || resolveEntityView(item.id);
     const stubMark = view.stub ? '<span class="wro-stub-chip" title="Tylko OGNIVO/AUM — brak raportu WRO">bez WRO</span>' : '';
     const fromArk = view.person ? '<span class="wro-stub-chip ark" title="Dopasowano z Arkusza">teczka</span>' : '';
+    const firstMark = isFirstSeenPerson(personKeyForEntity(item.id))
+      ? '<span class="wro-stub-chip first" title="Nie było tej osoby w poprzednim raporcie ani w Majątku Szafki">nowy wpis</span>'
+      : '';
     const folderIco = `<span class="wro-icon-jump wro-open-teczka" data-entity="${escWro(item.id)}" data-open-teczka="1" title="${view.person ? 'Otwórz teczkę w Szafce' : 'Szukaj teczki w Szafce'}">📂</span>`;
     const statusBadges = (inCart ? '🛒 ' : '') + (isAnalyzed ? '✅' : '');
     const maxDochod = item.availableSources.includes('Dochody') ? getMaxDochodForEntity(item.id) : 0;
@@ -867,7 +1010,7 @@ const WroModule = (() => {
       <div class="wro-list-item ${isAnalyzed ? 'is-analyzed' : ''} ${isActive ? 'active' : ''} ${view.stub ? 'is-stub' : ''}" data-id="${escWro(item.id)}">
         <div class="wro-list-title">
           <span title="${escWro(item.id)}">${escWro(view.displayName)}</span>
-          <span>${statusBadges}${dochodBadge}${stubMark}${fromArk}</span>
+          <span>${statusBadges}${dochodBadge}${stubMark}${fromArk}${firstMark}</span>
         </div>
         <div class="wro-list-score">${folderIco} ${iconsHtml}</div>
       </div>`;
@@ -1666,6 +1809,7 @@ const WroModule = (() => {
     getAnnotation, setAnnotationData,
     getMajatekSnapshot, personHasSection, hasPendingItemsForKey,
     getPendingGoneCount, getSourceCatalog, getPersonWroFlags,
+    filterFirstSeenOnly, isFirstSeenPerson, getFirstSeenStamp,
   };
 })();
 

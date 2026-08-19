@@ -1314,6 +1314,7 @@ const ZobowiazaniModule = (() => {
       Object.keys(archiveMap).length,
       deskPins.length,
       freshKeys.size,
+      (typeof WroModule !== 'undefined' && WroModule.getFirstSeenStamp) ? WroModule.getFirstSeenStamp() : '',
     ].join('|');
     if (_filterCache.key === cacheKey && _filterCache.rows) return _filterCache.rows;
 
@@ -1361,6 +1362,8 @@ const ZobowiazaniModule = (() => {
       rowsWithIndex = rowsWithIndex.filter(item => !!getCepikForPerson(item.info));
     } else if (activeFilter === 'wro_new') {
       rowsWithIndex = rowsWithIndex.filter(item => wroFlagsForKey(item.key).pending);
+    } else if (activeFilter === 'wro_first') {
+      rowsWithIndex = rowsWithIndex.filter(item => wroFlagsForKey(item.key).firstSeen);
     } else if (activeFilter.startsWith('no_')) {
       const sysName = activeFilter.replace('no_', '').toUpperCase();
       const sysIdx = dbSheet.columns.indexOf(sysName);
@@ -1448,8 +1451,8 @@ const ZobowiazaniModule = (() => {
   }
 
   function computeFilterCounts() {
-    if (!dbSheet || !dbSheet.rows) return { all: 0, todo: 0, progress: 0, complete: 0, cepik: 0, deferred: 0, due: 0 };
-    let todo = 0, progress = 0, complete = 0, cepikCount = 0, deferred = 0, due = 0, wroNew = 0;
+    if (!dbSheet || !dbSheet.rows) return { all: 0, todo: 0, progress: 0, complete: 0, cepik: 0, deferred: 0, due: 0, wroNew: 0, wroFirst: 0 };
+    let todo = 0, progress = 0, complete = 0, cepikCount = 0, deferred = 0, due = 0, wroNew = 0, wroFirst = 0;
     let scoped = 0;
     dbSheet.rows.forEach(r => {
       const key = personKeyFromRow(r);
@@ -1477,17 +1480,21 @@ const ZobowiazaniModule = (() => {
       if (!archived && !isSuspendedRow(r) && wroFlagsForKey(key).pending) {
         wroNew++;
       }
+      if (wroFlagsForKey(key).firstSeen) {
+        wroFirst++;
+      }
     });
-    return { all: scoped, todo, progress, complete, cepik: cepikCount, deferred, due, wroNew };
+    return { all: scoped, todo, progress, complete, cepik: cepikCount, deferred, due, wroNew, wroFirst };
   }
 
   function wroFlagsForKey(key) {
-    if (!key) return { sources: [], dochodMax: 0, pending: false };
+    const empty = { sources: [], dochodMax: 0, pending: false, firstSeen: false };
+    if (!key) return empty;
     if (_wroFlagCache.has(key)) return _wroFlagCache.get(key);
-    const empty = { sources: [], dochodMax: 0, pending: false };
     const flags = (typeof WroModule !== 'undefined' && WroModule.getPersonWroFlags)
       ? (WroModule.getPersonWroFlags(key) || empty)
       : empty;
+    if (typeof flags.firstSeen !== 'boolean') flags.firstSeen = false;
     _wroFlagCache.set(key, flags);
     return flags;
   }
@@ -1619,6 +1626,11 @@ const ZobowiazaniModule = (() => {
               ${counts.wroNew > 0 ? `
                 <button class="zob-pill pill-danger ${activeFilter === 'wro_new' ? 'active' : ''}" onclick="ZobowiazaniModule.setFilter('wro_new')" title="Osoby z niezałatwionymi pozycjami z ostatniej synchronizacji WRO (bez zawieszonych)">
                   🔥 Nowość WRO <span class="zob-pill-count">${counts.wroNew}</span>
+                </button>
+              ` : ''}
+              ${counts.wroFirst > 0 ? `
+                <button class="zob-pill pill-ok ${activeFilter === 'wro_first' ? 'active' : ''}" id="zob-wro-first-pill" onclick="ZobowiazaniModule.setFilter('wro_first')" title="Osoby z ostatniego raportu WRO, które nie miały wcześniej wpisu w bazie ani w Majątku. To nie to samo co 🔥 Nowość WRO.">
+                  🆕 Bez wcześniejszego wpisu <span class="zob-pill-count">${counts.wroFirst}</span>
                 </button>
               ` : ''}
               ${freshKeys.size ? `
@@ -1812,6 +1824,22 @@ const ZobowiazaniModule = (() => {
     } else if (freshBtn) {
       freshBtn.remove();
       if (activeFilter === 'fresh') activeFilter = 'all';
+    }
+    let firstBtn = document.getElementById('zob-wro-first-pill');
+    if (counts.wroFirst > 0) {
+      if (!firstBtn) {
+        firstBtn = document.createElement('button');
+        firstBtn.id = 'zob-wro-first-pill';
+        firstBtn.className = 'zob-pill pill-ok';
+        firstBtn.title = 'Osoby z ostatniego raportu WRO, które nie miały wcześniej wpisu w bazie ani w Majątku. To nie to samo co 🔥 Nowość WRO.';
+        firstBtn.setAttribute('onclick', "ZobowiazaniModule.setFilter('wro_first')");
+        const sep = bar.querySelector('.zob-pill-sep');
+        bar.insertBefore(firstBtn, sep || null);
+      }
+      firstBtn.innerHTML = `🆕 Bez wcześniejszego wpisu <span class="zob-pill-count">${counts.wroFirst}</span>`;
+    } else if (firstBtn) {
+      firstBtn.remove();
+      if (activeFilter === 'wro_first') activeFilter = 'all';
     }
     bar.querySelectorAll('.zob-pill').forEach(btn => {
       const onclick = btn.getAttribute('onclick') || '';
