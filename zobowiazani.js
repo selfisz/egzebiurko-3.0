@@ -988,11 +988,15 @@ const ZobowiazaniModule = (() => {
   }
 
   function wroRowCells(headers, row) {
-    const n = Math.max((headers || []).length, (row || []).length);
+    const hdrs = Array.isArray(headers) ? headers : [];
+    const vals = Array.isArray(row)
+      ? row
+      : (row && typeof row === 'object' ? Object.keys(row).sort((a, b) => Number(a) - Number(b)).map(k => row[k]) : []);
+    const n = Math.max(hdrs.length, vals.length);
     const out = [];
     for (let c = 0; c < n; c++) {
-      const h = String((headers && headers[c]) || '').trim();
-      const v = String((row && row[c]) == null ? '' : row[c]).trim();
+      const h = String(hdrs[c] || '').trim();
+      const v = String(vals[c] == null ? '' : vals[c]).trim();
       if (!h && !v) continue;
       out.push({ h: h || ('Kolumna ' + wroColLetter(c)), v });
     }
@@ -1027,19 +1031,50 @@ const ZobowiazaniModule = (() => {
     }).join('');
   }
 
+  function majatekSnapshotForInfo(info) {
+    if (typeof WroModule === 'undefined' || !WroModule.getMajatekSnapshot) return { pk: '', snap: null };
+    const pesel = String(info.pesel || '').replace(/\D/g, '');
+    const nip = String(info.nip || '').replace(/\D/g, '');
+    if (pesel) {
+      const snap = WroModule.getMajatekSnapshot(pesel);
+      if (snap && snap.sections && Object.keys(snap.sections).length) return { pk: pesel, snap };
+    }
+    if (nip) {
+      const snap = WroModule.getMajatekSnapshot(nip);
+      if (snap && snap.sections && Object.keys(snap.sections).length) return { pk: nip, snap };
+    }
+    return { pk: pesel || nip, snap: null };
+  }
+
+  function openMajatekSection(sid) {
+    const root = document.getElementById('zob-detail-content');
+    if (!root || !sid) return;
+    const el = root.querySelector('[data-maj-sec="' + sid.replace(/"/g, '') + '"]') || document.getElementById(sid);
+    if (!el) return;
+    el.classList.add('open');
+    const body = root.querySelector('.zob-open-body');
+    if (body) {
+      const top = el.getBoundingClientRect().top - body.getBoundingClientRect().top + body.scrollTop - 8;
+      body.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+    } else {
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }
+
   function renderMajatekHtml(info, row) {
     const hasWro = typeof WroModule !== 'undefined';
-    const pk = String(info.pesel || info.nip || '').replace(/\D/g, '');
     const suspended = row ? isSuspendedRow(row) : false;
+    const found = hasWro ? majatekSnapshotForInfo(info) : { pk: '', snap: null };
+    const pk = found.pk;
+    const snap = found.snap;
 
-    if (!hasWro || !pk || !WroModule.getMajatekSnapshot) {
+    if (!hasWro || !pk) {
       return `<div class="zob-sheet" style="border-style:dashed">
         <div class="zob-sheet-title"><span>Majątek z WRO</span></div>
         <p class="zob-mod-sub" style="margin:0">Brak PESEL/NIP lub modułu WRO — nie można dopasować danych majątkowych.</p>
       </div>`;
     }
 
-    const snap = WroModule.getMajatekSnapshot(pk);
     if (!snap || !snap.sections || !Object.keys(snap.sections).length) {
       return `<div class="zob-sheet" style="border-style:dashed">
         <div class="zob-sheet-title"><span>Majątek z WRO</span></div>
@@ -1066,9 +1101,9 @@ const ZobowiazaniModule = (() => {
       const iconMeta = catalog.find(c => c.key === secKey);
       const icon = iconMeta ? iconMeta.icon : '📄';
       const label = iconMeta ? iconMeta.label : secKey.replace('Wynik: ', '');
-      const sid = 'zob-maj-' + secKey.replace(/[^a-zA-Z0-9]/g, '');
+      const sid = 'zob-maj-' + pk + '-' + secKey.replace(/[^a-zA-Z0-9]/g, '');
       const n = (snap.sections[secKey].rows || []).length;
-      return `<button type="button" class="zob-maj-cap" onclick="(function(id){const el=document.getElementById(id);if(!el)return;el.classList.add('open');el.scrollIntoView({behavior:'smooth',block:'start'});})('${sid}')">${icon} ${escapeHtml(label)} <span>${n}</span></button>`;
+      return `<button type="button" class="zob-maj-cap" onclick="ZobowiazaniModule.openMajatekSection('${sid}')">${icon} ${escapeHtml(label)} <span>${n}</span></button>`;
     }).join('');
 
     const blocks = sectionKeys.map(secKey => {
@@ -1078,87 +1113,79 @@ const ZobowiazaniModule = (() => {
       const label = iconMeta ? iconMeta.label : secKey.replace('Wynik: ', '');
       const isAction = secKey.startsWith('Wynik:');
       const safe = secKey.replace(/[^a-zA-Z0-9]/g, '');
-      const sid = 'zob-maj-' + safe;
-      const headers = sec.headers || [];
-      const rows = sec.rows || [];
-      const previewLine = rows.slice(0, 2).map(r => wroRowPreview(headers, r)).filter(Boolean).join(' · ');
-      const startOpen = isAction;
+      const sid = 'zob-maj-' + pk + '-' + safe;
+      const headers = Array.isArray(sec.headers) ? sec.headers : [];
+      const rows = Array.isArray(sec.rows) ? sec.rows : [];
 
       const todoRows = [];
       const knownRows = [];
       rows.forEach(r => {
-        const fp = (r || []).slice(0, 5).map(v => String(v || '')).join('||');
+        const cells = Array.isArray(r) ? r : Object.keys(r || {}).sort().map(k => r[k]);
+        const fp = cells.slice(0, 5).map(v => String(v || '')).join('||');
         const ann = isAction && WroModule.getAnnotation ? WroModule.getAnnotation(pk, safe, fp) : null;
-        const pack = { r, fp, ann };
+        const pack = { r: cells, fp, ann };
         if (isAction && ann && (ann.status === 'done' || ann.status === 'excluded')) knownRows.push(pack);
         else todoRows.push(pack);
       });
 
-      const rowCard = (item, known, startExpanded) => {
+      const rowCard = (item, known) => {
         const ctxId = 'zwk' + (++_wroItemSeq);
         _wroItemCtx[ctxId] = { pk, safe, fp: item.fp };
         const title = wroRowPreview(headers, item.r);
         const fields = wroRowFieldsHtml(headers, item.r);
         const annot = isAction
           ? (known
-            ? `<button type="button" class="wro-annot-btn" style="background:#e2e8f0;color:#475569" onclick="event.stopPropagation();ZobowiazaniModule.markWroItem('${ctxId}',null)">↩️ Wróć</button>`
-            : `<span style="display:flex;gap:4px" onclick="event.stopPropagation()">
+            ? `<button type="button" class="wro-annot-btn" style="background:#e2e8f0;color:#475569" onclick="ZobowiazaniModule.markWroItem('${ctxId}',null)">↩️ Wróć</button>`
+            : `<span style="display:flex;gap:4px">
                 <button type="button" class="wro-annot-btn" style="background:#dcfce7;color:#166534" onclick="ZobowiazaniModule.markWroItem('${ctxId}','done')">✅ Zrobione</button>
                 <button type="button" class="wro-annot-btn" style="background:#fee2e2;color:#991b1b" onclick="ZobowiazaniModule.markWroItem('${ctxId}','excluded')">⛔ Wyklucz</button>
               </span>`)
           : '';
         const cls = item.ann?.status === 'excluded' ? 'wro-card-excl' : item.ann?.status === 'done' ? 'wro-card-done' : '';
-        return `
-        <div class="zob-vehicle ${startExpanded ? 'open' : ''} ${cls}" onclick="this.classList.toggle('open')" title="Kliknij, aby rozwinąć pełne dane">
-          <div class="zob-vehicle-sum">
-            <div>
-              <div class="zob-vehicle-brand">${escapeHtml(title)}</div>
-              <div class="zob-vehicle-meta">${startExpanded ? 'Kliknij, aby zwinąć' : 'Kliknij, aby zobaczyć wszystkie pola z Analityki WRO'}</div>
-            </div>
-            ${annot}
-          </div>
-          <div class="zob-vehicle-full"><div class="wro-card">${fields}</div></div>
+        return `<div class="wro-card ${cls}">
+          <div class="wro-card-hdr"><span>${escapeHtml(title)}</span>${annot}</div>
+          ${fields}
         </div>`;
       };
 
       const showTodo = !suspended || !isAction;
-      const itemsHtml = `
-        ${showTodo ? todoRows.map(it => rowCard(it, false, true)).join('') : ''}
-        ${!showTodo && todoRows.length ? `<p class="zob-mod-sub" style="margin:0">${todoRows.length} wpis(ów) bez decyzji — sprawa zawieszona.</p>` : ''}
-        ${isAction && todoRows.length === 0 && knownRows.length > 0 ? '<p class="zob-mod-sub" style="margin:0">✅ Wszystkie wpisy oznaczone</p>' : ''}
-        ${isAction && knownRows.length > 0 ? `
-          <div class="wro-known-toggle" onclick="event.stopPropagation();(function(el){const g=el.nextElementSibling;g.classList.toggle('wro-known-hidden');el.classList.toggle('expanded');el.querySelector('.wro-known-arrow').textContent=g.classList.contains('wro-known-hidden')?'▶':'▼'})(this)">
+      const cardsHtml = [
+        showTodo ? todoRows.map(it => rowCard(it, false)).join('') : '',
+        !showTodo && todoRows.length ? `<p class="zob-mod-sub" style="margin:0">${todoRows.length} wpis(ów) bez decyzji — sprawa zawieszona.</p>` : '',
+        isAction && todoRows.length === 0 && knownRows.length > 0 ? '<p class="zob-mod-sub" style="margin:0">✅ Wszystkie wpisy oznaczone</p>' : '',
+        isAction && knownRows.length > 0 ? `
+          <div class="wro-known-toggle" onclick="(function(el){const g=el.nextElementSibling;if(!g)return;g.classList.toggle('wro-known-hidden');el.classList.toggle('expanded');const a=el.querySelector('.wro-known-arrow');if(a)a.textContent=g.classList.contains('wro-known-hidden')?'▶':'▼'})(this)">
             <span>👁 Pokaż znane (${knownRows.length})</span><span class="wro-known-arrow">▶</span>
           </div>
-          <div class="wro-known-hidden">${knownRows.map(it => rowCard(it, true, false)).join('')}</div>
-        ` : ''}
-      `;
+          <div class="wro-known-hidden">${knownRows.map(it => rowCard(it, true)).join('')}</div>
+        ` : '',
+        (!todoRows.length && !knownRows.length) ? '<p class="zob-mod-sub" style="margin:0">Brak wierszy w tej sekcji</p>' : '',
+      ].join('');
 
-      return `<div class="zob-maj-sec ${startOpen ? 'open' : ''}" id="${sid}">
+      return `<section class="zob-maj-sec open" id="${sid}" data-maj-sec="${sid}">
         <button type="button" class="zob-maj-sec-hd" onclick="this.parentElement.classList.toggle('open')">
           <span class="zob-maj-sec-left">${icon} ${escapeHtml(label)} <span class="zob-asset-n">${rows.length}</span>${suspended && isAction ? ' <span class="zob-asset-n" style="background:rgba(122,85,36,.18);color:#7a5524">⏸</span>' : ''}</span>
-          <span class="zob-maj-sec-right">
-            <span class="zob-maj-sec-preview">${escapeHtml(previewLine || 'brak podglądu')}</span>
-            <span class="zob-maj-arrow">▼</span>
-          </span>
+          <span class="zob-maj-arrow">▼</span>
         </button>
         <div class="zob-maj-sec-body">
           <div class="zob-maj-sec-meta">
             <span>wrzucono ${fmtDatePl(sec.updatedAt)}</span>
             <button type="button" class="zob-action-btn" style="height:28px;padding:0 10px;font-size:.72rem" onclick="event.stopPropagation();ZobowiazaniModule.openWro(decodeURIComponent('${peselEnc}'), decodeURIComponent('${nipEnc}'), '${safe}')">Otwórz w Analityce</button>
           </div>
-          <div class="zob-asset-list">${itemsHtml || '<p class="zob-mod-sub" style="margin:0">Brak wierszy</p>'}</div>
+          <div class="zob-maj-cards">${cardsHtml}</div>
         </div>
-      </div>`;
+      </section>`;
     }).join('');
 
-    return `<div class="zob-sheet" style="margin-bottom:0">
+    return `<div class="zob-majatek">
+      <div class="zob-sheet" style="margin-bottom:0">
         <div class="zob-sheet-title"><span>Majątek z WRO</span><span>ost. synchronizacja: ${fmtDatePl(snap.lastSyncAt)}</span></div>
         ${dochodBadge ? `<div>${dochodBadge}</div>` : ''}
         <div class="zob-maj-caps">${capsules}</div>
-        <p class="zob-mod-sub" style="margin:0">Kliknij źródło (np. Raporter, AUM), potem wpis — te same pola co w Analityce WRO.</p>
+        <p class="zob-mod-sub" style="margin:0">Źródła i wpisy są od razu rozwinięte — te same pola co w Analityce WRO. Kliknij kapsułkę, żeby skoczyć do sekcji.</p>
       </div>
-      ${blocks}`;
+      ${blocks}
+    </div>`;
   }
 
   function openWroForPerson(pesel, nip, section) {
@@ -2992,6 +3019,7 @@ const ZobowiazaniModule = (() => {
     getIdIndex,
     openById,
     openWro: openWroForPerson,
+    openMajatekSection,
     copyCleanExcel: copyCleanExcelText,
     copy: copyToClipboard,
     loadJsonFile: triggerFilePicker,

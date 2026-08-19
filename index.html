@@ -1373,6 +1373,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
   flex:1; overflow-y:auto; padding:12px 18px 16px; display:flex; flex-direction:column; gap:12px; min-height:0;
   animation: zobTabFade .22s ease;
 }
+.zob-open-body > *{flex-shrink:0; min-height:auto}
 .zob-section{
   display:flex; flex-direction:column; gap:8px;
   padding-bottom:10px;
@@ -1467,6 +1468,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
 .zob-vehicle .wro-card{
   margin:0; border:1px solid var(--zob-edge); border-radius:8px; overflow:hidden; background:#fff;
 }
+.zob-majatek{display:flex; flex-direction:column; gap:10px; flex-shrink:0}
 .zob-maj-caps{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
 .zob-maj-cap{
   font:inherit; font-size:.76rem; font-weight:650; cursor:pointer;
@@ -1477,9 +1479,9 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
 .zob-maj-cap:hover{border-color:var(--zob-spine); background:#fff}
 .zob-maj-sec{
   border:1px solid var(--zob-edge); border-radius:12px; background:var(--zob-cream);
-  overflow:hidden;
+  overflow:hidden; flex-shrink:0;
 }
-.zob-maj-sec + .zob-maj-sec{margin-top:10px}
+.zob-maj-sec + .zob-maj-sec{margin-top:0}
 .zob-maj-sec-hd{
   width:100%; display:flex; align-items:center; justify-content:space-between; gap:10px;
   font:inherit; text-align:left; cursor:pointer;
@@ -1497,11 +1499,20 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
 .zob-maj-sec:not(.open) .zob-maj-sec-body{display:none}
 .zob-maj-sec-body{padding:10px 12px 12px; display:flex; flex-direction:column; gap:10px}
 .zob-maj-sec-meta{display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:.72rem; color:var(--zob-ink-soft)}
+.zob-maj-cards{display:flex; flex-direction:column; gap:10px}
+.zob-majatek .wro-card,
 .zob-maj-sec .wro-card{
   margin:0; border:1px solid var(--zob-edge); border-radius:8px; overflow:hidden;
   background:#fff; box-shadow:none;
 }
+.zob-majatek .wro-card-hdr,
+.zob-maj-sec .wro-card-hdr{
+  background:color-mix(in srgb, var(--zob-paper2) 70%, #fff);
+  color:var(--zob-ink-soft); border-bottom:1px solid var(--zob-edge);
+}
+.zob-majatek .wro-label,
 .zob-maj-sec .wro-label{color:var(--zob-ink-soft)}
+.zob-majatek .wro-value,
 .zob-maj-sec .wro-value{color:var(--zob-ink)}
 .zob-maj-sec .zob-vehicle-sum{align-items:flex-start}
 .zob-asset-list{display:flex;flex-direction:column;gap:8px}
