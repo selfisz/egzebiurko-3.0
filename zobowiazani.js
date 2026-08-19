@@ -26,6 +26,7 @@ const ZobowiazaniModule = (() => {
   // Stan filtrów i widoku
   let filterText = '';
   let activeFilter = 'all'; // 'all', 'todo', 'progress', 'complete', 'deferred', 'due', 'has_cepik', 'no_*'
+  let sourceFilters = new Set(); // klucze źródeł WRO — AND, klik włącza/wyłącza
   let sectionFilter = 'active'; // 'active' | 'desk' | 'archive' | 'suspended'
   let sortCol = 'idx';
   let sortDir = 1;
@@ -1227,6 +1228,7 @@ const ZobowiazaniModule = (() => {
       dbSheet.rows.length,
       sectionFilter,
       activeFilter,
+      [...sourceFilters].sort().join(','),
       filterText,
       sortCol,
       sortDir,
@@ -1280,9 +1282,6 @@ const ZobowiazaniModule = (() => {
       rowsWithIndex = rowsWithIndex.filter(item => !!getCepikForPerson(item.info));
     } else if (activeFilter === 'wro_new') {
       rowsWithIndex = rowsWithIndex.filter(item => wroFlagsForKey(item.key).pending);
-    } else if (activeFilter.startsWith('src:')) {
-      const secKey = activeFilter.slice(4);
-      rowsWithIndex = rowsWithIndex.filter(item => wroFlagsForKey(item.key).sources.includes(secKey));
     } else if (activeFilter.startsWith('no_')) {
       const sysName = activeFilter.replace('no_', '').toUpperCase();
       const sysIdx = dbSheet.columns.indexOf(sysName);
@@ -1292,6 +1291,17 @@ const ZobowiazaniModule = (() => {
           return !v;
         });
       }
+    }
+
+    if (sourceFilters.size) {
+      const need = [...sourceFilters];
+      rowsWithIndex = rowsWithIndex.filter(item => {
+        const src = wroFlagsForKey(item.key).sources;
+        for (let i = 0; i < need.length; i++) {
+          if (!src.includes(need[i])) return false;
+        }
+        return true;
+      });
     }
 
     if (sortCol === 'name') {
@@ -1420,8 +1430,8 @@ const ZobowiazaniModule = (() => {
     const catalog = WroModule.getSourceCatalog();
     if (!catalog.length) return '';
     const chips = catalog.map(c => {
-      const filterKey = 'src:' + c.key;
-      return `<button type="button" class="zob-src-ico ${activeFilter === filterKey ? 'active' : ''}" onclick="ZobowiazaniModule.setFilter('${filterKey}')" title="${escapeHtml(c.label)}">${c.icon}</button>`;
+      const enc = encodeURIComponent(c.key);
+      return `<button type="button" class="zob-src-ico ${sourceFilters.has(c.key) ? 'active' : ''}" data-src="${escapeHtml(c.key)}" onclick="ZobowiazaniModule.toggleSource(decodeURIComponent('${enc}'))" title="${escapeHtml(c.label)} — kliknij, żeby zaznaczyć / odznaczyć. Kilka ikon = wszystkie naraz.">${c.icon}</button>`;
     }).join('');
     return `<div class="zob-src-icos" id="zob-src-chips">${chips}</div>`;
   }
@@ -1476,7 +1486,7 @@ const ZobowiazaniModule = (() => {
             </div>
             <div class="zob-actions">
               <button class="zob-action-btn primary" onclick="ZobowiazaniModule.loadJsonFile()" title="Wczytaj bazę z pliku JSON / JS">Wczytaj bazę</button>
-              <button class="zob-action-btn ${filtersOpen ? 'is-on' : ''}" onclick="ZobowiazaniModule.toggleFilters()" title="Pokaż / ukryj filtry">Filtry${activeFilter !== 'all' || filterText ? ' ·' : ''}</button>
+              <button class="zob-action-btn ${filtersOpen ? 'is-on' : ''}" onclick="ZobowiazaniModule.toggleFilters()" title="Pokaż / ukryj filtry">Filtry${activeFilter !== 'all' || filterText || sourceFilters.size ? ' ·' : ''}</button>
               <button class="zob-action-btn" onclick="ZobowiazaniModule.refreshFromArkusz()" title="Pobierz aktualną bazę z Arkusza">Odśwież</button>
               <button class="zob-action-btn olive" onclick="ZobowiazaniModule.copyCleanExcel()" title="Kopiuje widoczne teczki jako czysty tekst do Excela">Do Excela</button>
             </div>
@@ -1684,12 +1694,16 @@ const ZobowiazaniModule = (() => {
     });
   }
 
+  function filtersMark() {
+    return activeFilter !== 'all' || filterText || sourceFilters.size ? ' ·' : '';
+  }
+
   function syncExtraFilterButtons() {
     const chipsBar = document.getElementById('zob-src-chips');
     if (!chipsBar) return;
     chipsBar.querySelectorAll('button.zob-src-ico').forEach(btn => {
-      const m = (btn.getAttribute('onclick') || '').match(/setFilter\('([^']+)'\)/);
-      btn.classList.toggle('active', !!m && m[1] === activeFilter);
+      const key = btn.getAttribute('data-src') || '';
+      btn.classList.toggle('active', sourceFilters.has(key));
     });
   }
 
@@ -1781,7 +1795,7 @@ const ZobowiazaniModule = (() => {
     return dots;
   }
 
-  function compactRowHtml(item) {
+  function compactRowHtml(item, displayIdx) {
     const r = item.row;
     const ri = item.idx;
     const info = item.info || extractPersonInfo(r);
@@ -1791,8 +1805,9 @@ const ZobowiazaniModule = (() => {
     const st = statusMeta(sysCount, r);
     const hasCar = !!getCepikForPerson(info);
     const fresh = rowIsFresh(r, info);
+    const alt = (displayIdx % 2) ? ' is-alt' : '';
     return `
-      <button type="button" class="zob-person-row ${isSelected ? 'is-selected' : ''}${hasCar ? ' has-car' : ''}${fresh ? ' is-fresh' : ''}" data-ri="${ri}">
+      <button type="button" class="zob-person-row ${isSelected ? 'is-selected' : ''}${hasCar ? ' has-car' : ''}${fresh ? ' is-fresh' : ''}${alt}" data-ri="${ri}">
         <div class="zob-person-main">
           <div class="zob-reg-name" title="${escapeHtml(info.name)}">${hasCar ? '<span class="zob-car-mark" title="Pojazd w CEPIK">🚗</span>' : ''}${escapeHtml(info.name)}${fresh ? '<span class="zob-fresh-mark">nowa</span>' : ''}</div>
           <div class="zob-systems-dots">${dotsHtml(r, false)}<span class="zob-systems-count">${sysCount}/5</span></div>
@@ -1822,8 +1837,9 @@ const ZobowiazaniModule = (() => {
       : '';
     const hasCar = !!getCepikForPerson(info);
     const fresh = rowIsFresh(r, info);
+    const alt = (displayIdx % 2) ? ' is-alt' : '';
     return `
-      <tr class="${isSelected ? 'is-selected' : ''}${pinned ? ' is-pinned' : ''}${hasCar ? ' has-car' : ''}${fresh ? ' is-fresh' : ''}" data-ri="${ri}">
+      <tr class="${isSelected ? 'is-selected' : ''}${pinned ? ' is-pinned' : ''}${hasCar ? ' has-car' : ''}${fresh ? ' is-fresh' : ''}${alt}" data-ri="${ri}">
         <td style="width:36px;color:var(--zob-ink-soft);font-size:.72rem">${displayIdx + 1}</td>
         <td>
           <div class="zob-reg-name" title="${escapeHtml(info.name)}">${hasCar ? '<span class="zob-car-mark" title="Pojazd w CEPIK">🚗</span>' : ''}${escapeHtml(info.name)}${fresh ? '<span class="zob-fresh-mark">nowa</span>' : ''}</div>
@@ -1860,7 +1876,8 @@ const ZobowiazaniModule = (() => {
     const fullCols = viewMode === 'list';
     const rowH = virtRowHeight();
     const { start, end } = virtRange(list, visibleRows.length, rowH);
-    const sig = [fullCols ? 't' : 'c', start, end, selectedRowIndex, activeTabKey, visibleRows.length, activeFilter].join('|');
+    const srcSig = [...sourceFilters].sort().join(',');
+    const sig = [fullCols ? 't' : 'c', start, end, selectedRowIndex, activeTabKey, visibleRows.length, activeFilter, srcSig].join('|');
     if (list._paintSig === sig) return;
     list._paintSig = sig;
 
@@ -1871,7 +1888,7 @@ const ZobowiazaniModule = (() => {
       spacer.style.height = (visibleRows.length * rowH) + 'px';
       win.style.transform = 'translateY(' + (start * rowH) + 'px)';
       let html = '';
-      for (let i = start; i < end; i++) html += compactRowHtml(visibleRows[i]);
+      for (let i = start; i < end; i++) html += compactRowHtml(visibleRows[i], i);
       win.innerHTML = html;
       return;
     }
@@ -1880,9 +1897,10 @@ const ZobowiazaniModule = (() => {
     if (!tbody) return;
     const topH = start * rowH;
     const botH = Math.max(0, (visibleRows.length - end) * rowH);
-    let html = `<tr class="zob-virt-pad"><td colspan="10" style="height:${topH}px;padding:0;border:0"></td></tr>`;
+    let html = '';
+    if (topH > 0) html += `<tr class="zob-virt-pad"><td colspan="10" style="height:${topH}px;padding:0;border:0"></td></tr>`;
     for (let i = start; i < end; i++) html += tableRowHtml(visibleRows[i], i);
-    html += `<tr class="zob-virt-pad"><td colspan="10" style="height:${botH}px;padding:0;border:0"></td></tr>`;
+    if (botH > 0) html += `<tr class="zob-virt-pad"><td colspan="10" style="height:${botH}px;padding:0;border:0"></td></tr>`;
     tbody.innerHTML = html;
   }
 
@@ -1956,20 +1974,26 @@ const ZobowiazaniModule = (() => {
     }
 
     paintVirtualWindow();
-    if (keepScroll) list.scrollTop = prevScroll;
-
-    const vis = getFilteredRows();
-    const visIdx = vis.findIndex(item => item.idx === selectedRowIndex);
-    if (!keepScroll) {
+    if (keepScroll) {
+      if (Math.abs((list.scrollTop || 0) - prevScroll) > 1) {
+        list.scrollTop = prevScroll;
+        list._paintSig = '';
+        paintVirtualWindow();
+      }
+    } else {
+      const vis = getFilteredRows();
+      const visIdx = vis.findIndex(item => item.idx === selectedRowIndex);
       const rowH = virtRowHeight();
       if (visIdx >= 0) {
         const target = visIdx * rowH;
         if (target < list.scrollTop || target > list.scrollTop + list.clientHeight - rowH * 2) {
           list.scrollTop = Math.max(0, target - rowH);
+          list._paintSig = '';
           paintVirtualWindow();
         }
       } else {
         list.scrollTop = 0;
+        list._paintSig = '';
         paintVirtualWindow();
       }
     }
@@ -2620,6 +2644,11 @@ const ZobowiazaniModule = (() => {
   }
 
   function setFilter(filterKey) {
+    if (filterKey && String(filterKey).startsWith('src:')) {
+      toggleSource(filterKey.slice(4));
+      return;
+    }
+    if (filterKey === 'all') sourceFilters.clear();
     activeFilter = filterKey;
     if (filterKey !== 'all') filtersOpen = true;
     const tb = document.querySelector('#zobowiazani-app .zob-toolbar');
@@ -2630,11 +2659,25 @@ const ZobowiazaniModule = (() => {
     document.querySelectorAll('#zobowiazani-app .zob-actions .zob-action-btn').forEach(b => {
       if ((b.getAttribute('onclick') || '').includes('toggleFilters')) {
         b.classList.toggle('is-on', filtersOpen);
-        const mark = activeFilter !== 'all' || filterText ? ' ·' : '';
-        b.textContent = `Filtry${mark}`;
+        b.textContent = `Filtry${filtersMark()}`;
       }
     });
-    renderViews();
+    invalidateListCache();
+    renderViews({ keepScroll: true });
+  }
+
+  function toggleSource(srcKey) {
+    const key = String(srcKey || '');
+    if (!key) return;
+    if (sourceFilters.has(key)) sourceFilters.delete(key);
+    else sourceFilters.add(key);
+    invalidateListCache();
+    renderViews({ keepScroll: true });
+    document.querySelectorAll('#zobowiazani-app .zob-actions .zob-action-btn').forEach(b => {
+      if ((b.getAttribute('onclick') || '').includes('toggleFilters')) {
+        b.textContent = `Filtry${filtersMark()}`;
+      }
+    });
   }
 
   function toggleFilters() {
@@ -2647,7 +2690,7 @@ const ZobowiazaniModule = (() => {
     document.querySelectorAll('#zobowiazani-app .zob-actions .zob-action-btn').forEach(b => {
       if ((b.getAttribute('onclick') || '').includes('toggleFilters')) {
         b.classList.toggle('is-on', filtersOpen);
-        const mark = activeFilter !== 'all' || filterText ? ' ·' : '';
+        const mark = filtersMark();
         b.textContent = `Filtry${mark}`;
       }
     });
@@ -2809,6 +2852,7 @@ const ZobowiazaniModule = (() => {
     toggle: toggleSystem,
     setAll: setAllSystems,
     setFilter,
+    toggleSource,
     toggleFilters,
     setSection,
     sortBy,
@@ -2831,7 +2875,7 @@ const ZobowiazaniModule = (() => {
     markWroItem,
     setDetailTab,
     invalidateListCache,
-    refreshAfterWroSync() { invalidateListCache(); if (activated) renderViews(); },
+    refreshAfterWroSync() { invalidateListCache(); if (activated) renderViews({ keepScroll: true }); },
     openRowMenu,
     openTabMenu,
     syncCepik: syncCepikForPerson,
