@@ -249,23 +249,29 @@ const WroModule = (() => {
         }
       }
     }
-    try {
-      const ognivoData = SharedStore.get(SharedStore.KEYS.OGNIVO, {});
-      const entry = ognivoData[entityId] || ognivoData[pk];
-      if (entry && Array.isArray(entry.banks)) {
-        for (const b of entry.banks) {
-          const ann = findBankAnnotation(pk, bankCodeCanon(b)) || annots[buildAnnotKey(pk, 'OGNIVOStore', b)];
-          if (!ann || (ann.status !== 'done' && ann.status !== 'excluded')) return true;
-        }
-      }
-    } catch {}
+    // Uwaga: banki OGNIVO z plików XML (SharedStore) są już doklejone do
+    // `sections['Wynik: OGNIVO']` przez wywołującego (entitySectionsSnapshot /
+    // getMajatekSnapshot → mergeXmlOgnivoBanks), więc nie sprawdzamy ich tu
+    // jeszcze raz osobno — inaczej licznik pokazywałby banki, których nie widać
+    // w karcie osoby w Majątku (bo nie były zapisane w snapshotcie).
     return false;
   }
 
   function getMajatekSnapshot(personKey) {
     const pk = digitsId(personKey);
     if (!pk) return null;
-    return loadMajatekStore().people[pk] || null;
+    const snap = loadMajatekStore().people[pk];
+    if (!snap) return null;
+    // Banki OGNIVO z wgranych plików XML mogą przyjść już po ostatniej
+    // synchronizacji z Szafką — doklejamy je tutaj na żywo (bez zapisu do
+    // localStorage), żeby licznik „nowość” i widok Majątku zawsze pokazywały
+    // to samo, zamiast liczyć bank, którego nie widać w karcie osoby.
+    if (snap.sections) {
+      const merged = { ...snap.sections };
+      try { mergeXmlOgnivoBanks(merged, snap.entityId, pk); } catch {}
+      return { ...snap, sections: merged };
+    }
+    return snap;
   }
   function personHasSection(personKey, sectionKey) {
     const snap = getMajatekSnapshot(personKey);
