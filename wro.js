@@ -75,6 +75,139 @@ const WroModule = (() => {
     });
     return max;
   }
+  function isOgnivoSource(src) {
+    return /ognivo/i.test(String(src || ''));
+  }
+
+  function bankCodeCanon(text) {
+    const d = String(text || '').replace(/\D/g, '');
+    if (d.length >= 4) return d.slice(0, 4);
+    return d;
+  }
+
+  function splitBankParts(text) {
+    const s = String(text || '').trim();
+    if (!s) return [];
+    if (/[|;]/.test(s) || /\n/.test(s)) {
+      return s.split(/\s*[|;]\s*|\n+/).map(x => x.trim()).filter(Boolean);
+    }
+    return [s];
+  }
+
+  function ognivoBankColIndex(headers) {
+    const hLower = (headers || []).map(h => String(h || '').toLowerCase());
+    const idx = hLower.findIndex(h => /bank|kod\s*bank|instytucj/i.test(h));
+    return idx >= 0 ? idx : 0;
+  }
+
+  function explodeOgnivoRows(headers, bodyRows) {
+    const bankIdx = ognivoBankColIndex(headers);
+    const out = [];
+    const seen = new Set();
+    (bodyRows || []).forEach(row => {
+      const cells = Array.isArray(row) ? row.slice() : [row];
+      let col = bankIdx;
+      let blob = cells[col];
+      if (!/[|;]/.test(String(blob || ''))) {
+        const alt = cells.findIndex(c => /[|;]/.test(String(c || '')) && /\d{3,8}/.test(String(c || '')));
+        if (alt >= 0) { col = alt; blob = cells[alt]; }
+      }
+      const parts = splitBankParts(blob != null ? blob : cells.filter(Boolean).join(' | '));
+      const chunks = parts.length ? parts : [''];
+      chunks.forEach(part => {
+        const copy = cells.slice();
+        if (part) {
+          copy[col] = part;
+          copy[bankIdx] = part;
+        }
+        const canon = bankCodeCanon(part || copy.join(' '));
+        const dedupe = canon || String(part || copy.join('|')).toLowerCase();
+        if (dedupe && seen.has(dedupe)) return;
+        if (dedupe) seen.add(dedupe);
+        out.push(copy);
+      });
+    });
+    return out;
+  }
+
+  function ognivoLabelFromRow(headers, row) {
+    const idx = ognivoBankColIndex(headers);
+    const raw = String((row && row[idx]) != null ? row[idx] : (row || []).filter(Boolean).join(' ')).trim();
+    return raw || 'Bank';
+  }
+
+  function ognivoCanonFromRow(headers, row) {
+    return bankCodeCanon(ognivoLabelFromRow(headers, row));
+  }
+
+  function findBankAnnotation(pk, canon) {
+    if (!pk || !canon) return null;
+    const all = loadAnnotations();
+    const prefix = pk + '|';
+    let found = null;
+    Object.keys(all).forEach(k => {
+      if (!k.startsWith(prefix)) return;
+      const rest = k.slice(prefix.length);
+      const i2 = rest.indexOf('|');
+      if (i2 < 0) return;
+      const sec = rest.slice(0, i2);
+      const iid = rest.slice(i2 + 1);
+      if (sec !== 'OGNIVOStore' && !/ognivo/i.test(sec)) return;
+      const c = bankCodeCanon(String(iid).replace(/^bank:/i, ''));
+      if (c && c === canon) {
+        const ann = all[k];
+        if (!found || (ann && (ann.status === 'done' || ann.status === 'excluded'))) found = ann;
+      } else if (canon.length >= 4 && String(iid).indexOf(canon) >= 0) {
+        const ann = all[k];
+        if (ann && (ann.status === 'done' || ann.status === 'excluded') && !found) found = ann;
+      }
+    });
+    return found;
+  }
+
+  function setOgnivoBankStatus(pk, canon, data) {
+    if (!pk || !canon) return;
+    const iid = 'bank:' + canon;
+    setAnnotationData(pk, 'WynikOGNIVO', iid, data);
+    try {
+      const ognivoData = SharedStore.get(SharedStore.KEYS.OGNIVO, {});
+      Object.keys(ognivoData || {}).forEach(k => {
+        const entry = ognivoData[k];
+        if (!entry || !Array.isArray(entry.banks)) return;
+        const samePerson = digitsId(k) === digitsId(pk) || digitsId(entry.id) === digitsId(pk);
+        if (!samePerson) return;
+        entry.banks.forEach(b => {
+          if (bankCodeCanon(b) === canon) setAnnotationData(pk, 'OGNIVOStore', b, data);
+        });
+      });
+    } catch {}
+  }
+
+  function mergeXmlOgnivoBanks(sections, entityId, personKey) {
+    try {
+      const ognivoData = SharedStore.get(SharedStore.KEYS.OGNIVO, {});
+      const entry = ognivoData[entityId] || ognivoData[personKey];
+      if (!entry || !Array.isArray(entry.banks) || !entry.banks.length) return;
+      const key = 'Wynik: OGNIVO';
+      const existing = sections[key];
+      const headers = existing && existing.headers && existing.headers.length ? existing.headers : ['Bank', 'Źródło'];
+      const rows = existing ? explodeOgnivoRows(headers, existing.rows) : [];
+      const have = new Set(rows.map(r => ognivoCanonFromRow(headers, r)).filter(Boolean));
+      entry.banks.forEach(b => {
+        const c = bankCodeCanon(b);
+        if (c && have.has(c)) return;
+        if (c) have.add(c);
+        const row = headers.map(() => '');
+        row[ognivoBankColIndex(headers)] = b;
+        const srcIdx = headers.findIndex(h => /zrodl|źródl|source/i.test(String(h || '')));
+        if (srcIdx >= 0) row[srcIdx] = 'OGNIVO XML';
+        else if (headers.length > 1) row[1] = 'OGNIVO XML';
+        rows.push(row);
+      });
+      sections[key] = { updatedAt: todayIsoWro(), headers, rows };
+    } catch {}
+  }
+
   function entitySectionsSnapshot(id) {
     const data = bazaDanych[id] || {};
     const out = {};
@@ -82,27 +215,44 @@ const WroModule = (() => {
       if (k === '_meta') return;
       const rows = data[k];
       if (!Array.isArray(rows) || rows.length <= 1) return;
-      out[k] = { updatedAt: todayIsoWro(), headers: rows[0], rows: rows.slice(1) };
+      const headers = rows[0];
+      const body = rows.slice(1);
+      out[k] = {
+        updatedAt: todayIsoWro(),
+        headers,
+        rows: isOgnivoSource(k) ? explodeOgnivoRows(headers, body) : body
+      };
     });
+    mergeXmlOgnivoBanks(out, id, personKeyForEntity(id));
     return out;
   }
   function sectionsHavePending(personKey, sections, entityId) {
     const annots = loadAnnotations();
+    const pk = digitsId(personKey);
     for (const src of Object.keys(sections)) {
       if (!src.startsWith('Wynik:')) continue;
       const safe = src.replace(/[^a-zA-Z0-9]/g, '');
-      for (const row of (sections[src].rows || [])) {
-        const fp = row.slice(0, 5).map(v => String(v || '')).join('||');
-        const ann = annots[buildAnnotKey(personKey, safe, fp)];
-        if (!ann || (ann.status !== 'done' && ann.status !== 'excluded')) return true;
+      const sec = sections[src] || {};
+      const headers = sec.headers || [];
+      const rows = isOgnivoSource(src) ? explodeOgnivoRows(headers, sec.rows || []) : (sec.rows || []);
+      for (const row of rows) {
+        if (isOgnivoSource(src)) {
+          const canon = ognivoCanonFromRow(headers, row);
+          const ann = findBankAnnotation(pk, canon);
+          if (!ann || (ann.status !== 'done' && ann.status !== 'excluded')) return true;
+        } else {
+          const fp = (row || []).slice(0, 5).map(v => String(v || '')).join('||');
+          const ann = annots[buildAnnotKey(pk, safe, fp)];
+          if (!ann || (ann.status !== 'done' && ann.status !== 'excluded')) return true;
+        }
       }
     }
     try {
       const ognivoData = SharedStore.get(SharedStore.KEYS.OGNIVO, {});
-      const entry = ognivoData[entityId] || ognivoData[personKey];
+      const entry = ognivoData[entityId] || ognivoData[pk];
       if (entry && Array.isArray(entry.banks)) {
         for (const b of entry.banks) {
-          const ann = annots[buildAnnotKey(personKey, 'OGNIVOStore', b)];
+          const ann = findBankAnnotation(pk, bankCodeCanon(b)) || annots[buildAnnotKey(pk, 'OGNIVOStore', b)];
           if (!ann || (ann.status !== 'done' && ann.status !== 'excluded')) return true;
         }
       }
@@ -222,6 +372,13 @@ const WroModule = (() => {
       pending: suspended ? false : sectionsHavePending(pk, snap.sections, snap.entityId),
       firstSeen
     };
+  }
+
+  function filterPendingOnly() {
+    if (typeof ZobowiazaniModule !== 'undefined' && typeof ZobowiazaniModule.setFilter === 'function') {
+      ZobowiazaniModule.setFilter('wro_new');
+    }
+    if (typeof Router !== 'undefined') Router.navigate('zobowiazani');
   }
 
   function filterFirstSeenOnly() {
@@ -349,6 +506,7 @@ const WroModule = (() => {
           ${summary.firstSeen > 0 ? `<div class="wro-ldlg-note wro-ldlg-first">🆕 ${summary.firstSeen} osób bez wcześniejszego wpisu (nowe względem poprzedniego raportu / Szafki). To nie to samo co 🔥 nowość — tam są niezałatwione adnotacje.</div>` : ''}
           ${summary.goneCount > 0 ? `<div class="wro-ldlg-note wro-ldlg-first">⚠️ ${summary.goneCount} zniknięć do przeglądu — dane, które osoba miała wcześniej, a już ich nie ma w tym raporcie.</div>` : ''}
           <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
+            ${summary.news > 0 ? `<button class="wro-ldlg-close" style="flex:1;background:#b91c1c" onclick="document.getElementById('wro-sync-dlg').style.display='none';WroModule.filterPendingOnly()">Pokaż do zajęcia (${summary.news})</button>` : ''}
             ${summary.firstSeen > 0 ? `<button class="wro-ldlg-close" style="flex:1;background:#0f766e" onclick="document.getElementById('wro-sync-dlg').style.display='none';WroModule.filterFirstSeenOnly()">Pokaż bez wcześniejszego wpisu (${summary.firstSeen})</button>` : ''}
             ${summary.goneCount > 0 ? `<button class="wro-ldlg-close" style="flex:1;background:#b45309" onclick="document.getElementById('wro-sync-dlg').style.display='none';WroModule.reviewGoneQueue()">Przejrzyj zniknięcia (${summary.goneCount})</button>` : ''}
             ${summary.missing.length > 0 ? `<button class="wro-ldlg-close" style="flex:1;background:#475569" onclick="document.getElementById('wro-sync-dlg').style.display='none';WroModule.filterMissingFolders()">Filtruj listę: bez teczki</button>` : ''}
@@ -1211,24 +1369,32 @@ const WroModule = (() => {
       const isAction = src.startsWith('Wynik:');
       const disp = src.replace('Wynik: ','Akcja: ');
       const headers = rows[0];
+      const bodyRows = isOgnivoSource(src) ? explodeOgnivoRows(headers, rows.slice(1)) : rows.slice(1);
 
       const todoCards = [];
       const knownCards = [];
 
-      Array.from({length: rows.length - 1}, (_, i) => i + 1).forEach(r => {
-        const rowFp = rows[r].slice(0, 5).map(v => String(v || '')).join('||');
-        const ann = isAction ? getAnnotation(personKey, safe, rowFp) : null;
+      bodyRows.forEach((row, i) => {
+        const isOg = isOgnivoSource(src);
+        const canon = isOg ? ognivoCanonFromRow(headers, row) : '';
+        const rowFp = isOg ? ('bank:' + (canon || String(i))) : row.slice(0, 5).map(v => String(v || '')).join('||');
+        const ann = isAction
+          ? (isOg ? findBankAnnotation(personKey, canon) : getAnnotation(personKey, safe, rowFp))
+          : null;
         const cardCls = ann?.status === 'excluded' ? 'wro-card-excl' : ann?.status === 'done' ? 'wro-card-done' : '';
+        const title = isOg ? ognivoLabelFromRow(headers, row) : ('Wpis #' + (i + 1));
+        const annotIid = isOg ? ('bank:' + canon) : rowFp;
+        const annotSec = isOg ? 'WynikOGNIVO' : safe;
         const cardHtml = `
           <div class="wro-card ${cardCls}">
             <div class="wro-card-hdr">
-              <span>Wpis #${r}</span>
-              ${isAction ? annotChipHtml(ann, personKey, safe, rowFp) : ''}
+              <span>${escWro(title)}</span>
+              ${isAction ? annotChipHtml(ann, personKey, annotSec, annotIid) : ''}
             </div>
             ${headers.map((h, c) => {
-              const val = rows[r][c];
-              const dispVal = (val && String(val).trim()) ? val : '<span class="wro-empty-val">—</span>';
-              return `<div class="wro-card-row"><div class="wro-label">${h}</div><div class="wro-value">${dispVal}</div></div>`;
+              const val = row[c];
+              const dispVal = (val && String(val).trim()) ? escWro(val) : '<span class="wro-empty-val">—</span>';
+              return `<div class="wro-card-row"><div class="wro-label">${escWro(h)}</div><div class="wro-value">${dispVal}</div></div>`;
             }).join('')}
           </div>
         `;
@@ -1431,7 +1597,9 @@ const WroModule = (() => {
       document.body.appendChild(pop);
     }
 
-    const current = getAnnotation(ctx.pk, ctx.sec, ctx.iid);
+    const current = (/ognivo/i.test(ctx.sec) || ctx.sec === 'OGNIVOStore')
+      ? (findBankAnnotation(ctx.pk, bankCodeCanon(String(ctx.iid).replace(/^bank:/i, ''))) || getAnnotation(ctx.pk, ctx.sec, ctx.iid))
+      : getAnnotation(ctx.pk, ctx.sec, ctx.iid);
     const isTodo = !current || !current.status || current.status === 'todo';
     const isDone = current?.status === 'done';
     const isExcl = current?.status === 'excluded';
@@ -1496,7 +1664,13 @@ const WroModule = (() => {
       data = { status: 'excluded', reason };
     }
 
-    setAnnotationData(ctx.pk, ctx.sec, ctx.iid, data);
+    if ((/ognivo/i.test(ctx.sec) || ctx.sec === 'OGNIVOStore')) {
+      const canon = bankCodeCanon(String(ctx.iid).replace(/^bank:/i, ''));
+      if (canon) setOgnivoBankStatus(ctx.pk, canon, data);
+      else setAnnotationData(ctx.pk, ctx.sec, ctx.iid, data);
+    } else {
+      setAnnotationData(ctx.pk, ctx.sec, ctx.iid, data);
+    }
 
     const pop = document.getElementById('wro-annot-pop');
     if (pop) pop.style.display = 'none';
@@ -1810,6 +1984,9 @@ const WroModule = (() => {
     getMajatekSnapshot, personHasSection, hasPendingItemsForKey,
     getPendingGoneCount, getSourceCatalog, getPersonWroFlags,
     filterFirstSeenOnly, isFirstSeenPerson, getFirstSeenStamp,
+    explodeOgnivoRows, findBankAnnotation, setOgnivoBankStatus,
+    isOgnivoSource, ognivoCanonFromRow, ognivoLabelFromRow,
+    filterPendingOnly,
   };
 })();
 

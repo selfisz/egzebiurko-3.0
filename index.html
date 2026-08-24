@@ -1469,6 +1469,18 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
   margin:0; border:1px solid var(--zob-edge); border-radius:8px; overflow:hidden; background:#fff;
 }
 .zob-majatek{display:flex; flex-direction:column; gap:10px; flex-shrink:0}
+.zob-maj-toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.zob-maj-cards.is-banks{
+  display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:8px;
+}
+.zob-maj-bank{
+  border:1px solid var(--zob-edge); border-radius:10px; background:#fff;
+  padding:10px 12px; display:flex; flex-direction:column; gap:8px; min-height:92px;
+}
+.zob-maj-bank.is-done{border-color:#86efac; background:#f0fdf4}
+.zob-maj-bank.is-excl{border-color:#fca5a5; background:#fef2f2; opacity:.85}
+.zob-maj-bank-code{font-weight:800; font-size:.95rem; color:var(--zob-ink)}
+.zob-maj-bank-name{font-size:.78rem; color:var(--zob-ink-soft); line-height:1.3}
 .zob-maj-caps{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
 .zob-maj-cap{
   font:inherit; font-size:.76rem; font-weight:650; cursor:pointer;
