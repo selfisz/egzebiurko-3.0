@@ -2782,9 +2782,15 @@ const ZobowiazaniModule = (() => {
       toggleSource(filterKey.slice(4));
       return;
     }
-    if (filterKey === 'all') sourceFilters.clear();
-    activeFilter = filterKey;
-    if (filterKey !== 'all') filtersOpen = true;
+    if (filterKey === 'all') {
+      sourceFilters.clear();
+      activeFilter = 'all';
+    } else if (activeFilter === filterKey) {
+      activeFilter = 'all';
+    } else {
+      activeFilter = filterKey;
+    }
+    if (activeFilter !== 'all') filtersOpen = true;
     const tb = document.querySelector('#zobowiazani-app .zob-toolbar');
     if (tb) {
       tb.classList.toggle('filters-open', filtersOpen);
