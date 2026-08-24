@@ -226,17 +226,19 @@ const WroModule = (() => {
     mergeXmlOgnivoBanks(out, id, personKeyForEntity(id));
     return out;
   }
-  function sectionsHavePending(personKey, sections, entityId) {
+  function sectionsHavePending(personKey, sections, entityId, onlyOgnivo) {
     const annots = loadAnnotations();
     const pk = digitsId(personKey);
     for (const src of Object.keys(sections)) {
       if (!src.startsWith('Wynik:')) continue;
+      const isOg = isOgnivoSource(src);
+      if (onlyOgnivo && !isOg) continue;
       const safe = src.replace(/[^a-zA-Z0-9]/g, '');
       const sec = sections[src] || {};
       const headers = sec.headers || [];
-      const rows = isOgnivoSource(src) ? explodeOgnivoRows(headers, sec.rows || []) : (sec.rows || []);
+      const rows = isOg ? explodeOgnivoRows(headers, sec.rows || []) : (sec.rows || []);
       for (const row of rows) {
-        if (isOgnivoSource(src)) {
+        if (isOg) {
           const canon = ognivoCanonFromRow(headers, row);
           const ann = findBankAnnotation(pk, canon);
           if (!ann || (ann.status !== 'done' && ann.status !== 'excluded')) return true;
@@ -269,7 +271,7 @@ const WroModule = (() => {
     const snap = getMajatekSnapshot(personKey);
     return !!(snap && snap.sections && snap.sections[sectionKey]);
   }
-  function hasPendingItemsForKey(personKey) {
+  function hasPendingItemsForKey(personKey, onlyOgnivo) {
     const pk = digitsId(personKey);
     if (!pk) return false;
     if (typeof ZobowiazaniModule !== 'undefined' && typeof ZobowiazaniModule.isSuspended === 'function' && ZobowiazaniModule.isSuspended(pk)) {
@@ -277,7 +279,7 @@ const WroModule = (() => {
     }
     const snap = getMajatekSnapshot(pk);
     if (!snap || !snap.sections) return false;
-    return sectionsHavePending(pk, snap.sections, snap.entityId);
+    return sectionsHavePending(pk, snap.sections, snap.entityId, onlyOgnivo);
   }
   function getPendingGoneCount() {
     return loadMajatekStore().pendingGone.length;
@@ -362,14 +364,15 @@ const WroModule = (() => {
   function getPersonWroFlags(personKey) {
     const pk = digitsId(personKey);
     const firstSeen = isFirstSeenPerson(pk);
-    if (!pk) return { sources: [], dochodMax: 0, pending: false, firstSeen: false };
+    if (!pk) return { sources: [], dochodMax: 0, pending: false, pendingOgnivo: false, firstSeen: false };
     const snap = getMajatekSnapshot(pk);
-    if (!snap || !snap.sections) return { sources: [], dochodMax: 0, pending: false, firstSeen };
+    if (!snap || !snap.sections) return { sources: [], dochodMax: 0, pending: false, pendingOgnivo: false, firstSeen };
     const suspended = typeof ZobowiazaniModule !== 'undefined' && typeof ZobowiazaniModule.isSuspended === 'function' && ZobowiazaniModule.isSuspended(pk);
     return {
       sources: Object.keys(snap.sections),
       dochodMax: snap.dochodMax || 0,
       pending: suspended ? false : sectionsHavePending(pk, snap.sections, snap.entityId),
+      pendingOgnivo: suspended ? false : sectionsHavePending(pk, snap.sections, snap.entityId, true),
       firstSeen
     };
   }

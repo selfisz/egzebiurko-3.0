@@ -1499,6 +1499,8 @@ const ZobowiazaniModule = (() => {
       rowsWithIndex = rowsWithIndex.filter(item => !!getCepikForPerson(item.info));
     } else if (activeFilter === 'wro_new') {
       rowsWithIndex = rowsWithIndex.filter(item => wroFlagsForKey(item.key).pending);
+    } else if (activeFilter === 'wro_ognivo') {
+      rowsWithIndex = rowsWithIndex.filter(item => wroFlagsForKey(item.key).pendingOgnivo);
     } else if (activeFilter === 'wro_first') {
       rowsWithIndex = rowsWithIndex.filter(item => wroFlagsForKey(item.key).firstSeen);
     } else if (activeFilter.startsWith('no_')) {
@@ -1588,14 +1590,14 @@ const ZobowiazaniModule = (() => {
   }
 
   function computeFilterCounts() {
-    if (!dbSheet || !dbSheet.rows) return { all: 0, todo: 0, progress: 0, complete: 0, cepik: 0, deferred: 0, due: 0, wroNew: 0, wroFirst: 0 };
+    if (!dbSheet || !dbSheet.rows) return { all: 0, todo: 0, progress: 0, complete: 0, cepik: 0, deferred: 0, due: 0, wroNew: 0, wroFirst: 0, wroOgnivo: 0 };
     // Skanowanie całej listy jest tanie samo w sobie, ale jest wołane po każdej
     // drobnej akcji — cache'ujemy wynik i liczymy od nowa tylko gdy coś, co
     // wpływa na liczniki, faktycznie się zmieniło (patrz: _countsDirty).
     if (!_countsDirty && _countsCache && _countsCache.rowsRef === dbSheet.rows) {
       return _countsCache.counts;
     }
-    let todo = 0, progress = 0, complete = 0, cepikCount = 0, deferred = 0, due = 0, wroNew = 0, wroFirst = 0;
+    let todo = 0, progress = 0, complete = 0, cepikCount = 0, deferred = 0, due = 0, wroNew = 0, wroFirst = 0, wroOgnivo = 0;
     let scoped = 0;
     dbSheet.rows.forEach(r => {
       const key = personKeyFromRow(r);
@@ -1623,24 +1625,28 @@ const ZobowiazaniModule = (() => {
       if (!archived && !isSuspendedRow(r) && wroFlagsForKey(key).pending) {
         wroNew++;
       }
+      if (!archived && !isSuspendedRow(r) && wroFlagsForKey(key).pendingOgnivo) {
+        wroOgnivo++;
+      }
       if (wroFlagsForKey(key).firstSeen) {
         wroFirst++;
       }
     });
-    const counts = { all: scoped, todo, progress, complete, cepik: cepikCount, deferred, due, wroNew, wroFirst };
+    const counts = { all: scoped, todo, progress, complete, cepik: cepikCount, deferred, due, wroNew, wroFirst, wroOgnivo };
     _countsCache = { rowsRef: dbSheet.rows, counts };
     _countsDirty = false;
     return counts;
   }
 
   function wroFlagsForKey(key) {
-    const empty = { sources: [], dochodMax: 0, pending: false, firstSeen: false };
+    const empty = { sources: [], dochodMax: 0, pending: false, pendingOgnivo: false, firstSeen: false };
     if (!key) return empty;
     if (_wroFlagCache.has(key)) return _wroFlagCache.get(key);
     const flags = (typeof WroModule !== 'undefined' && WroModule.getPersonWroFlags)
       ? (WroModule.getPersonWroFlags(key) || empty)
       : empty;
     if (typeof flags.firstSeen !== 'boolean') flags.firstSeen = false;
+    if (typeof flags.pendingOgnivo !== 'boolean') flags.pendingOgnivo = false;
     _wroFlagCache.set(key, flags);
     return flags;
   }
@@ -1772,6 +1778,11 @@ const ZobowiazaniModule = (() => {
               ${counts.wroNew > 0 ? `
                 <button class="zob-pill pill-danger ${activeFilter === 'wro_new' ? 'active' : ''}" id="zob-wro-new-pill" onclick="ZobowiazaniModule.setFilter('wro_new')" title="Osoby z wpisami do zajęcia — bank/JPK/AUM bez Zrobione lub Wyklucz. Po nowej synchronizacji zostają tylko nowe, jeszcze nieoznaczone.">
                   🔥 Nowość WRO <span class="zob-pill-count">${counts.wroNew}</span>
+                </button>
+              ` : ''}
+              ${counts.wroOgnivo > 0 ? `
+                <button class="zob-pill pill-danger ${activeFilter === 'wro_ognivo' ? 'active' : ''}" id="zob-wro-ognivo-pill" onclick="ZobowiazaniModule.setFilter('wro_ognivo')" title="Osoby z bankami OGNIVO bez Zrobione lub Wyklucz (tylko OGNIVO, bez JPK/AUM).">
+                  🏦 Nowe banki OGNIVO <span class="zob-pill-count">${counts.wroOgnivo}</span>
                 </button>
               ` : ''}
               ${counts.wroFirst > 0 ? `
@@ -1986,6 +1997,22 @@ const ZobowiazaniModule = (() => {
     } else if (wroNewBtn) {
       wroNewBtn.remove();
       if (activeFilter === 'wro_new') activeFilter = 'all';
+    }
+    let wroOgnivoBtn = document.getElementById('zob-wro-ognivo-pill');
+    if (counts.wroOgnivo > 0) {
+      if (!wroOgnivoBtn) {
+        wroOgnivoBtn = document.createElement('button');
+        wroOgnivoBtn.id = 'zob-wro-ognivo-pill';
+        wroOgnivoBtn.className = 'zob-pill pill-danger';
+        wroOgnivoBtn.title = 'Osoby z bankami OGNIVO bez Zrobione lub Wyklucz (tylko OGNIVO, bez JPK/AUM).';
+        wroOgnivoBtn.setAttribute('onclick', "ZobowiazaniModule.setFilter('wro_ognivo')");
+        const sep = bar.querySelector('.zob-pill-sep');
+        bar.insertBefore(wroOgnivoBtn, sep || null);
+      }
+      wroOgnivoBtn.innerHTML = `🏦 Nowe banki OGNIVO <span class="zob-pill-count">${counts.wroOgnivo}</span>`;
+    } else if (wroOgnivoBtn) {
+      wroOgnivoBtn.remove();
+      if (activeFilter === 'wro_ognivo') activeFilter = 'all';
     }
     let firstBtn = document.getElementById('zob-wro-first-pill');
     if (counts.wroFirst > 0) {
