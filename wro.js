@@ -487,9 +487,9 @@ const WroModule = (() => {
       </button>`).join('');
     const missHtml = summary.missing.length
       ? `<div class="wro-ldlg-note" style="text-align:left;padding:6px">
-          <div style="font-weight:700;margin-bottom:6px;padding:0 6px">📂 Bez teczki w Szafce — kliknij, aby otworzyć i dopasować ręcznie:</div>
+          <div style="font-weight:700;margin-bottom:6px;padding:0 6px">📂 Brak w Szafce — kliknij, aby otworzyć i dopasować ręcznie:</div>
           <div class="wro-missing-list">${missRows}</div>
-          ${summary.missing.length > 25 ? `<div style="padding:6px 6px 0;font-size:.75rem">…i ${summary.missing.length - 25} więcej — użyj filtra „Bez teczki” w WRO.</div>` : ''}
+          ${summary.missing.length > 25 ? `<div style="padding:6px 6px 0;font-size:.75rem">…i ${summary.missing.length - 25} więcej — użyj filtra „Brak w Szafce” w WRO.</div>` : ''}
         </div>`
       : '';
     dlg.innerHTML = `
@@ -500,7 +500,7 @@ const WroModule = (() => {
             <div class="wro-ldlg-card wro-ldlg-done"><div class="wro-ldlg-num">${summary.added}</div><div class="wro-ldlg-lbl">✅ dodanych</div></div>
             <div class="wro-ldlg-card"><div class="wro-ldlg-num">${summary.updated}</div><div class="wro-ldlg-lbl">🔁 zaktualizowanych</div></div>
             <div class="wro-ldlg-card wro-ldlg-todo"><div class="wro-ldlg-num">${summary.news}</div><div class="wro-ldlg-lbl">🔥 z nowością</div></div>
-            <div class="wro-ldlg-card wro-ldlg-partial"><div class="wro-ldlg-num">${summary.missing.length}</div><div class="wro-ldlg-lbl">📂 brakuje teczki</div></div>
+            <div class="wro-ldlg-card wro-ldlg-partial"><div class="wro-ldlg-num">${summary.missing.length}</div><div class="wro-ldlg-lbl">📂 brak w Szafce</div></div>
           </div>
           ${missHtml}
           ${summary.firstSeen > 0 ? `<div class="wro-ldlg-note wro-ldlg-first">🆕 ${summary.firstSeen} osób bez wcześniejszego wpisu (nowe względem poprzedniego raportu / Szafki). To nie to samo co 🔥 nowość — tam są niezałatwione adnotacje.</div>` : ''}
@@ -509,7 +509,7 @@ const WroModule = (() => {
             ${summary.news > 0 ? `<button class="wro-ldlg-close" style="flex:1;background:#b91c1c" onclick="document.getElementById('wro-sync-dlg').style.display='none';WroModule.filterPendingOnly()">Pokaż do zajęcia (${summary.news})</button>` : ''}
             ${summary.firstSeen > 0 ? `<button class="wro-ldlg-close" style="flex:1;background:#0f766e" onclick="document.getElementById('wro-sync-dlg').style.display='none';WroModule.filterFirstSeenOnly()">Pokaż bez wcześniejszego wpisu (${summary.firstSeen})</button>` : ''}
             ${summary.goneCount > 0 ? `<button class="wro-ldlg-close" style="flex:1;background:#b45309" onclick="document.getElementById('wro-sync-dlg').style.display='none';WroModule.reviewGoneQueue()">Przejrzyj zniknięcia (${summary.goneCount})</button>` : ''}
-            ${summary.missing.length > 0 ? `<button class="wro-ldlg-close" style="flex:1;background:#475569" onclick="document.getElementById('wro-sync-dlg').style.display='none';WroModule.filterMissingFolders()">Filtruj listę: bez teczki</button>` : ''}
+            ${summary.missing.length > 0 ? `<button class="wro-ldlg-close" style="flex:1;background:#475569" onclick="document.getElementById('wro-sync-dlg').style.display='none';WroModule.filterMissingFolders()">Filtruj listę: brak w Szafce</button>` : ''}
             <button class="wro-ldlg-close" style="flex:1" onclick="document.getElementById('wro-sync-dlg').style.display='none'">Zamknij</button>
           </div>
         </div>
@@ -1063,8 +1063,8 @@ const WroModule = (() => {
     fc.innerHTML = '';
     const noFolderChip = document.createElement('div');
     noFolderChip.className = 'wro-chip wro-chip-warn' + (filterNoFolder ? ' active' : '');
-    noFolderChip.innerHTML = '🗂 Bez teczki w Szafce';
-    noFolderChip.title = 'Podmioty bez dopasowanej teczki (PESEL/NIP) w Szafce';
+    noFolderChip.innerHTML = '🗂 Brak w Szafce';
+    noFolderChip.title = 'Podmioty bez dopasowanego rekordu (PESEL/NIP) w Szafce';
     noFolderChip.onclick = () => {
       filterNoFolder = !filterNoFolder;
       noFolderChip.classList.toggle('active', filterNoFolder);
@@ -1148,7 +1148,7 @@ const WroModule = (() => {
     const isActive   = currentActiveId === item.id;
     const view = item._view || resolveEntityView(item.id);
     const stubMark = view.stub ? '<span class="wro-stub-chip" title="Tylko OGNIVO/AUM — brak raportu WRO">bez WRO</span>' : '';
-    const fromArk = view.person ? '<span class="wro-stub-chip ark" title="Dopasowano z Arkusza">teczka</span>' : '';
+    const fromArk = view.person ? '<span class="wro-stub-chip ark" title="Dopasowano z Arkusza">w Szafce</span>' : '';
     const firstMark = isFirstSeenPerson(personKeyForEntity(item.id))
       ? '<span class="wro-stub-chip first" title="Nie było tej osoby w poprzednim raporcie ani w Majątku Szafki">nowy wpis</span>'
       : '';
@@ -1290,7 +1290,7 @@ const WroModule = (() => {
             <h2 class="wro-entity-title">
               ${escWro(view.displayName)}
               ${view.stub ? `<span class="wro-stub-chip" title="W bazie WRO są tylko wyniki OGNIVO/AUM">bez raportu WRO</span>` : ''}
-              ${view.person ? `<span class="wro-stub-chip ark">teczka z Arkusza</span>` : (view.stub ? `<span class="wro-stub-chip" title="PESEL/NIP nie znaleziony w Arkuszu">poza bazą</span>` : '')}
+              ${view.person ? `<span class="wro-stub-chip ark" title="Dopasowano z Arkusza">w Szafce</span>` : (view.stub ? `<span class="wro-stub-chip" title="PESEL/NIP nie znaleziony w Arkuszu">poza bazą</span>` : '')}
               ${metaBadges ? `<div class="wro-meta-row">${metaBadges}</div>` : ''}
               ${ognivoBadge}
               ${isZawieszonaWro(id, a3, b3) ? `<span class="wro-ognivo-badge" style="background:#7a5524" title="Sprawa zawieszona w Szafce / Arkuszu">⏸ Zawieszona</span>` : ''}
