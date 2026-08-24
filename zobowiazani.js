@@ -53,12 +53,15 @@ const ZobowiazaniModule = (() => {
   let _wroFlagCache = new Map();
   let _wroItemCtx = {};
   let _wroItemSeq = 0;
+  let _countsCache = null;
+  let _countsDirty = true;
   restoreOpenTabs();
 
   function invalidateListCache() {
     _filterCache = { key: '', rows: null };
     _personColCache = { sheet: null, len: -1, map: null };
     _wroFlagCache = new Map();
+    _countsDirty = true;
   }
 
   function loadJsonKey(key, fallback) {
@@ -98,10 +101,12 @@ const ZobowiazaniModule = (() => {
 
   function persistDeskPins() {
     saveJsonKey(DESK_PINS_KEY, deskPins);
+    _countsDirty = true;
   }
 
   function persistArchive() {
     saveJsonKey(ARCHIVE_IDS_KEY, archiveMap);
+    _countsDirty = true;
   }
 
   function personKeyFromInfo(info) {
@@ -306,6 +311,7 @@ const ZobowiazaniModule = (() => {
     if (!Array.isArray(dbSheet.columns)) dbSheet.columns = [];
     ensureSystemColumns(dbSheet);
     invalidateListCache();
+    markSuspendDirty();
     return true;
   }
 
@@ -318,6 +324,43 @@ const ZobowiazaniModule = (() => {
       console.warn('[ZobowiazaniModule] localStorage save failed:', e);
     }
   }
+
+  // ── Zapis do localStorage/Arkusza: odroczony i zbiorczy ──
+  // Zmiany w pamięci (dbData/dbSheet) dzieją się natychmiast (UI reaguje od razu);
+  // fizyczny zapis (JSON.stringify + localStorage + postMessage do Arkusza) jest
+  // zbierany i wykonywany raz po krótkiej chwili ciszy, żeby kilka szybkich
+  // kliknięć nie serializowało całej bazy za każdym razem.
+  const SAVE_DEBOUNCE_MS = 400;
+  let _saveTimer = null;
+  let _suspendDirty = true; // true na starcie: pierwszy zapis zawsze aktualizuje store zawieszonych
+
+  function markSuspendDirty() { _suspendDirty = true; }
+
+  function flushSaveNow() {
+    if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null; }
+    if (!dbData || !dbSheet) return;
+    try {
+      dbData.savedAt = new Date().toISOString();
+      _lastSyncedAt = dbData.savedAt;
+      // Blokuj echo sync na czas zapisu (wcześniej: SET_DB → reload → pusta baza / miganie)
+      _suppressSyncUntil = Date.now() + 2500;
+      if (_suspendDirty) {
+        persistZawieszoneStore();
+        _suspendDirty = false;
+      }
+      const json = JSON.stringify(dbData);
+      localStorage.setItem(AUTOSAVE_KEY, json);
+      const frame = document.getElementById('arkusz-frame');
+      if (frame && frame.contentWindow) {
+        frame.contentWindow.postMessage({ type: 'SET_DB', payload: json }, '*');
+      }
+    } catch (e) {
+      console.error('[ZobowiazaniModule] Błąd zapisu:', e);
+      if (typeof showToast === 'function') showToast('Błąd zapisu bazy!', 'error');
+    }
+  }
+
+  window.addEventListener('beforeunload', flushSaveNow);
 
   /* ─── SYNCHRONIZACJA Z ARKUSZEM / PLIKIEM ──────────────── */
   let _syncTimer = null;
@@ -706,21 +749,8 @@ const ZobowiazaniModule = (() => {
   function saveData() {
     if (!dbData || !dbSheet) return;
     invalidateListCache();
-    try {
-      dbData.savedAt = new Date().toISOString();
-      _lastSyncedAt = dbData.savedAt;
-      // Blokuj echo sync na czas zapisu (wcześniej: SET_DB → reload → pusta baza / miganie)
-      _suppressSyncUntil = Date.now() + 2500;
-      persistZawieszoneStore();
-      persistLocal();
-      const frame = document.getElementById('arkusz-frame');
-      if (frame && frame.contentWindow) {
-        frame.contentWindow.postMessage({ type: 'SET_DB', payload: JSON.stringify(dbData) }, '*');
-      }
-    } catch (e) {
-      console.error('[ZobowiazaniModule] Błąd zapisu:', e);
-      if (typeof showToast === 'function') showToast('Błąd zapisu bazy!', 'error');
-    }
+    if (_saveTimer) clearTimeout(_saveTimer);
+    _saveTimer = setTimeout(flushSaveNow, SAVE_DEBOUNCE_MS);
   }
 
   function getTodayStr() {
@@ -1559,6 +1589,12 @@ const ZobowiazaniModule = (() => {
 
   function computeFilterCounts() {
     if (!dbSheet || !dbSheet.rows) return { all: 0, todo: 0, progress: 0, complete: 0, cepik: 0, deferred: 0, due: 0, wroNew: 0, wroFirst: 0 };
+    // Skanowanie całej listy jest tanie samo w sobie, ale jest wołane po każdej
+    // drobnej akcji — cache'ujemy wynik i liczymy od nowa tylko gdy coś, co
+    // wpływa na liczniki, faktycznie się zmieniło (patrz: _countsDirty).
+    if (!_countsDirty && _countsCache && _countsCache.rowsRef === dbSheet.rows) {
+      return _countsCache.counts;
+    }
     let todo = 0, progress = 0, complete = 0, cepikCount = 0, deferred = 0, due = 0, wroNew = 0, wroFirst = 0;
     let scoped = 0;
     dbSheet.rows.forEach(r => {
@@ -1591,7 +1627,10 @@ const ZobowiazaniModule = (() => {
         wroFirst++;
       }
     });
-    return { all: scoped, todo, progress, complete, cepik: cepikCount, deferred, due, wroNew, wroFirst };
+    const counts = { all: scoped, todo, progress, complete, cepik: cepikCount, deferred, due, wroNew, wroFirst };
+    _countsCache = { rowsRef: dbSheet.rows, counts };
+    _countsDirty = false;
+    return counts;
   }
 
   function wroFlagsForKey(key) {
@@ -2248,7 +2287,8 @@ const ZobowiazaniModule = (() => {
     saveData();
   }
 
-  function renderDetailOnly() {
+  function renderDetailOnly(opts) {
+    opts = opts || {};
     const detailContent = document.getElementById('zob-detail-content');
     if (!detailContent || !dbSheet || !dbSheet.rows) return;
 
@@ -2406,6 +2446,17 @@ const ZobowiazaniModule = (() => {
           <textarea class="zob-note-area" id="zob-note-input" placeholder="Notatki do sprawy...">${escapeHtml(info.notatka || '')}</textarea>
         </div>
       `;
+    }
+
+    // Odświeżenie tylko treści zakładki (np. po oznaczeniu wpisu WRO) — bez
+    // przebudowy nagłówka/tabów/stopki, żeby nie tracić stanu i nie migać całą teczką.
+    if (opts.bodyOnly) {
+      const existingBody = detailContent.querySelector('.zob-open-body');
+      if (existingBody) {
+        existingBody.setAttribute('key', `${detailTab}-${animKey}`);
+        existingBody.innerHTML = `${detailTab !== 'dane' ? deferBanner : ''}${bodyHtml}`;
+        return;
+      }
     }
 
     detailContent.innerHTML = `
@@ -2690,6 +2741,7 @@ const ZobowiazaniModule = (() => {
 
   function setSection(sec) {
     sectionFilter = (sec === 'desk' || sec === 'archive' || sec === 'suspended') ? sec : 'active';
+    _countsDirty = true;
     renderViews();
   }
 
@@ -2698,6 +2750,7 @@ const ZobowiazaniModule = (() => {
     ensureSystemColumns(dbSheet);
     const ci = dbSheet.columns.indexOf(SUSPEND_COL);
     if (ci < 0) return;
+    markSuspendDirty();
     const r = dbSheet.rows[ri];
     while (r.length < dbSheet.columns.length) r.push('');
     if (isSuspendedRow(r)) {
@@ -2781,7 +2834,7 @@ const ZobowiazaniModule = (() => {
       WroModule.setAnnotationData(ctx.pk, ctx.safe, ctx.fp, data);
     } else return;
     invalidateListCache();
-    renderDetailOnly();
+    renderDetailOnly({ bodyOnly: true });
     updatePillsBar();
   }
 
