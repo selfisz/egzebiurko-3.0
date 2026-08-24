@@ -1046,6 +1046,17 @@ const ZobowiazaniModule = (() => {
     return { pk: pesel || nip, snap: null };
   }
 
+  function isOgSec(secKey) {
+    return /ognivo/i.test(String(secKey || ''))
+      || (typeof WroModule !== 'undefined' && typeof WroModule.isOgnivoSource === 'function' && WroModule.isOgnivoSource(secKey));
+  }
+
+  function expandMajatek(open) {
+    document.querySelectorAll('#zob-detail-content .zob-maj-sec').forEach(el => {
+      el.classList.toggle('open', !!open);
+    });
+  }
+
   function openMajatekSection(sid) {
     const root = document.getElementById('zob-detail-content');
     if (!root || !sid) return;
@@ -1102,7 +1113,11 @@ const ZobowiazaniModule = (() => {
       const icon = iconMeta ? iconMeta.icon : '📄';
       const label = iconMeta ? iconMeta.label : secKey.replace('Wynik: ', '');
       const sid = 'zob-maj-' + pk + '-' + secKey.replace(/[^a-zA-Z0-9]/g, '');
-      const n = (snap.sections[secKey].rows || []).length;
+      const headers = Array.isArray(snap.sections[secKey].headers) ? snap.sections[secKey].headers : [];
+      const raw = snap.sections[secKey].rows || [];
+      const n = (isOgSec(secKey) && WroModule.explodeOgnivoRows)
+        ? WroModule.explodeOgnivoRows(headers, raw).length
+        : raw.length;
       return `<button type="button" class="zob-maj-cap" onclick="ZobowiazaniModule.openMajatekSection('${sid}')">${icon} ${escapeHtml(label)} <span>${n}</span></button>`;
     }).join('');
 
@@ -1112,37 +1127,54 @@ const ZobowiazaniModule = (() => {
       const icon = iconMeta ? iconMeta.icon : '📄';
       const label = iconMeta ? iconMeta.label : secKey.replace('Wynik: ', '');
       const isAction = secKey.startsWith('Wynik:');
+      const isOg = isOgSec(secKey);
       const safe = secKey.replace(/[^a-zA-Z0-9]/g, '');
       const sid = 'zob-maj-' + pk + '-' + safe;
       const headers = Array.isArray(sec.headers) ? sec.headers : [];
-      const rows = Array.isArray(sec.rows) ? sec.rows : [];
+      const rowsRaw = Array.isArray(sec.rows) ? sec.rows : [];
+      const rows = (isOg && WroModule.explodeOgnivoRows) ? WroModule.explodeOgnivoRows(headers, rowsRaw) : rowsRaw;
 
       const todoRows = [];
       const knownRows = [];
       rows.forEach(r => {
         const cells = Array.isArray(r) ? r : Object.keys(r || {}).sort().map(k => r[k]);
-        const fp = cells.slice(0, 5).map(v => String(v || '')).join('||');
-        const ann = isAction && WroModule.getAnnotation ? WroModule.getAnnotation(pk, safe, fp) : null;
-        const pack = { r: cells, fp, ann };
+        const canon = isOg && WroModule.ognivoCanonFromRow ? WroModule.ognivoCanonFromRow(headers, cells) : '';
+        const fp = isOg ? ('bank:' + canon) : cells.slice(0, 5).map(v => String(v || '')).join('||');
+        const ann = isAction
+          ? (isOg && WroModule.findBankAnnotation
+            ? WroModule.findBankAnnotation(pk, canon)
+            : (WroModule.getAnnotation ? WroModule.getAnnotation(pk, safe, fp) : null))
+          : null;
+        const pack = { r: cells, fp, ann, canon, bankLabel: isOg && WroModule.ognivoLabelFromRow ? WroModule.ognivoLabelFromRow(headers, cells) : '' };
         if (isAction && ann && (ann.status === 'done' || ann.status === 'excluded')) knownRows.push(pack);
         else todoRows.push(pack);
       });
 
       const rowCard = (item, known) => {
         const ctxId = 'zwk' + (++_wroItemSeq);
-        _wroItemCtx[ctxId] = { pk, safe, fp: item.fp };
-        const title = wroRowPreview(headers, item.r);
+        _wroItemCtx[ctxId] = { pk, safe, fp: item.fp, bankCanon: item.canon || '' };
+        const title = item.bankLabel || wroRowPreview(headers, item.r);
         const fields = wroRowFieldsHtml(headers, item.r);
         const annot = isAction
           ? (known
             ? `<button type="button" class="wro-annot-btn" style="background:#e2e8f0;color:#475569" onclick="ZobowiazaniModule.markWroItem('${ctxId}',null)">↩️ Wróć</button>`
-            : `<span style="display:flex;gap:4px">
+            : `<span style="display:flex;gap:4px;flex-wrap:wrap">
                 <button type="button" class="wro-annot-btn" style="background:#dcfce7;color:#166534" onclick="ZobowiazaniModule.markWroItem('${ctxId}','done')">✅ Zrobione</button>
                 <button type="button" class="wro-annot-btn" style="background:#fee2e2;color:#991b1b" onclick="ZobowiazaniModule.markWroItem('${ctxId}','excluded')">⛔ Wyklucz</button>
               </span>`)
           : '';
-        const cls = item.ann?.status === 'excluded' ? 'wro-card-excl' : item.ann?.status === 'done' ? 'wro-card-done' : '';
-        return `<div class="wro-card ${cls}">
+        const cls = item.ann?.status === 'excluded' ? 'is-excl' : item.ann?.status === 'done' ? 'is-done' : '';
+        if (isOg) {
+          const code = item.canon ? escapeHtml(item.canon) : '';
+          const name = escapeHtml(String(item.bankLabel || '').replace(/^\d{3,8}\s*[—–-]?\s*/, '') || title);
+          return `<div class="zob-maj-bank ${cls}">
+            <div class="zob-maj-bank-code">${code || escapeHtml(title)}</div>
+            <div class="zob-maj-bank-name">${name}</div>
+            ${annot}
+          </div>`;
+        }
+        const cardCls = item.ann?.status === 'excluded' ? 'wro-card-excl' : item.ann?.status === 'done' ? 'wro-card-done' : '';
+        return `<div class="wro-card ${cardCls}">
           <div class="wro-card-hdr"><span>${escapeHtml(title)}</span>${annot}</div>
           ${fields}
         </div>`;
@@ -1157,14 +1189,19 @@ const ZobowiazaniModule = (() => {
           <div class="wro-known-toggle" onclick="(function(el){const g=el.nextElementSibling;if(!g)return;g.classList.toggle('wro-known-hidden');el.classList.toggle('expanded');const a=el.querySelector('.wro-known-arrow');if(a)a.textContent=g.classList.contains('wro-known-hidden')?'▶':'▼'})(this)">
             <span>👁 Pokaż znane (${knownRows.length})</span><span class="wro-known-arrow">▶</span>
           </div>
-          <div class="wro-known-hidden">${knownRows.map(it => rowCard(it, true)).join('')}</div>
+          <div class="wro-known-hidden ${isOg ? 'zob-maj-cards is-banks' : ''}">${knownRows.map(it => rowCard(it, true)).join('')}</div>
         ` : '',
         (!todoRows.length && !knownRows.length) ? '<p class="zob-mod-sub" style="margin:0">Brak wierszy w tej sekcji</p>' : '',
       ].join('');
 
-      return `<section class="zob-maj-sec open" id="${sid}" data-maj-sec="${sid}">
+      const pendingN = todoRows.length;
+      const pendingBadge = isAction && pendingN
+        ? `<span class="zob-asset-n" style="background:rgba(139,58,58,.12);color:var(--zob-spine)">do zajęcia ${pendingN}</span>`
+        : '';
+
+      return `<section class="zob-maj-sec" id="${sid}" data-maj-sec="${sid}">
         <button type="button" class="zob-maj-sec-hd" onclick="this.parentElement.classList.toggle('open')">
-          <span class="zob-maj-sec-left">${icon} ${escapeHtml(label)} <span class="zob-asset-n">${rows.length}</span>${suspended && isAction ? ' <span class="zob-asset-n" style="background:rgba(122,85,36,.18);color:#7a5524">⏸</span>' : ''}</span>
+          <span class="zob-maj-sec-left">${icon} ${escapeHtml(label)} <span class="zob-asset-n">${rows.length}</span>${pendingBadge}${suspended && isAction ? ' <span class="zob-asset-n" style="background:rgba(122,85,36,.18);color:#7a5524">⏸</span>' : ''}</span>
           <span class="zob-maj-arrow">▼</span>
         </button>
         <div class="zob-maj-sec-body">
@@ -1172,7 +1209,7 @@ const ZobowiazaniModule = (() => {
             <span>wrzucono ${fmtDatePl(sec.updatedAt)}</span>
             <button type="button" class="zob-action-btn" style="height:28px;padding:0 10px;font-size:.72rem" onclick="event.stopPropagation();ZobowiazaniModule.openWro(decodeURIComponent('${peselEnc}'), decodeURIComponent('${nipEnc}'), '${safe}')">Otwórz w Analityce</button>
           </div>
-          <div class="zob-maj-cards">${cardsHtml}</div>
+          <div class="zob-maj-cards${isOg ? ' is-banks' : ''}">${cardsHtml}</div>
         </div>
       </section>`;
     }).join('');
@@ -1181,8 +1218,12 @@ const ZobowiazaniModule = (() => {
       <div class="zob-sheet" style="margin-bottom:0">
         <div class="zob-sheet-title"><span>Majątek z WRO</span><span>ost. synchronizacja: ${fmtDatePl(snap.lastSyncAt)}</span></div>
         ${dochodBadge ? `<div>${dochodBadge}</div>` : ''}
+        <div class="zob-maj-toolbar">
+          <button type="button" class="zob-action-btn" onclick="ZobowiazaniModule.expandMajatek(true)">Rozwiń wszystko</button>
+          <button type="button" class="zob-action-btn" onclick="ZobowiazaniModule.expandMajatek(false)">Zwiń wszystko</button>
+        </div>
         <div class="zob-maj-caps">${capsules}</div>
-        <p class="zob-mod-sub" style="margin:0">Źródła i wpisy są od razu rozwinięte — te same pola co w Analityce WRO. Kliknij kapsułkę, żeby skoczyć do sekcji.</p>
+        <p class="zob-mod-sub" style="margin:0">Źródła są zwinięte. Kliknij kapsułkę albo „Rozwiń wszystko”. Banki OGNIVO są osobno — 🔥 Nowość WRO pokazuje tylko to, czego jeszcze nie oznaczyłeś jako zrobione / wykluczone.</p>
       </div>
       ${blocks}
     </div>`;
@@ -1651,7 +1692,7 @@ const ZobowiazaniModule = (() => {
                 Do powrotu <span class="zob-pill-count">${counts.due}</span>
               </button>
               ${counts.wroNew > 0 ? `
-                <button class="zob-pill pill-danger ${activeFilter === 'wro_new' ? 'active' : ''}" onclick="ZobowiazaniModule.setFilter('wro_new')" title="Osoby z niezałatwionymi pozycjami z ostatniej synchronizacji WRO (bez zawieszonych)">
+                <button class="zob-pill pill-danger ${activeFilter === 'wro_new' ? 'active' : ''}" onclick="ZobowiazaniModule.setFilter('wro_new')" title="Osoby z wpisami do zajęcia — bank/JPK/AUM bez Zrobione lub Wyklucz. Po nowej synchronizacji zostają tylko nowe, jeszcze nieoznaczone.">
                   🔥 Nowość WRO <span class="zob-pill-count">${counts.wroNew}</span>
                 </button>
               ` : ''}
@@ -2677,8 +2718,13 @@ const ZobowiazaniModule = (() => {
   function markWroItem(ctxId, status) {
     const ctx = _wroItemCtx[ctxId];
     if (!ctx) return;
-    if (typeof WroModule === 'undefined' || !WroModule.setAnnotationData) return;
-    WroModule.setAnnotationData(ctx.pk, ctx.safe, ctx.fp, status ? { status } : null);
+    if (typeof WroModule === 'undefined') return;
+    const data = status ? { status } : null;
+    if (ctx.bankCanon && typeof WroModule.setOgnivoBankStatus === 'function') {
+      WroModule.setOgnivoBankStatus(ctx.pk, ctx.bankCanon, data);
+    } else if (WroModule.setAnnotationData) {
+      WroModule.setAnnotationData(ctx.pk, ctx.safe, ctx.fp, data);
+    } else return;
     invalidateListCache();
     renderDetailOnly();
     updatePillsBar();
@@ -3026,6 +3072,7 @@ const ZobowiazaniModule = (() => {
     openById,
     openWro: openWroForPerson,
     openMajatekSection,
+    expandMajatek,
     copyCleanExcel: copyCleanExcelText,
     copy: copyToClipboard,
     loadJsonFile: triggerFilePicker,
