@@ -833,6 +833,36 @@ const ZobowiazaniModule = (() => {
     });
   }
 
+  function markKawaDoneToday(rowIndex) {
+    if (!dbSheet || !dbSheet.rows[rowIndex]) return false;
+    ensureSystemColumns(dbSheet);
+    const idx = dbSheet.columns.indexOf('KAWA');
+    if (idx < 0) return false;
+    const r = dbSheet.rows[rowIndex];
+    while (r.length < dbSheet.columns.length) r.push('');
+    const cur = String(r[idx] || '').trim();
+    if (cur.toLowerCase() === 'pomiń') return false;
+    const today = getTodayStr();
+    if (cur === today) return false;
+    r[idx] = today;
+    recalcRowStatus(rowIndex);
+    saveData();
+    invalidateListCache();
+    if (typeof showToast === 'function') {
+      showToast('KAWA: oznaczono jako zrobione (' + today + ')', 'success', 1800);
+    }
+    return true;
+  }
+
+  function copyIdAndMarkKawa(text, el, rowIndex) {
+    copyToClipboard(text, el);
+    if (markKawaDoneToday(rowIndex)) {
+      renderTableOnly({ keepScroll: true });
+      renderDetailOnly();
+      updatePillsBar();
+    }
+  }
+
   /* ─── INTELIGENTNA EKSTRAKCJA DANYCH OSOBOWYCH ──────────── */
   function getPersonColMap() {
     const cols = (dbSheet && dbSheet.columns) || [];
@@ -2383,8 +2413,8 @@ const ZobowiazaniModule = (() => {
         <div class="zob-open-header-main">
           <div class="zob-open-title">${escapeHtml(info.name)}</div>
           ${(info.pesel || info.nip || info.adresStr) ? `<div class="zob-open-ids">
-            ${info.pesel ? `<button type="button" class="zob-id-chip" title="Kopiuj PESEL" onclick="ZobowiazaniModule.copy('${info.pesel}', this)"><span class="lbl">PESEL</span>${info.pesel}</button>` : ''}
-            ${info.nip ? `<button type="button" class="zob-id-chip" title="Kopiuj NIP" onclick="ZobowiazaniModule.copy('${info.nip}', this)"><span class="lbl">NIP</span>${info.nip}</button>` : ''}
+            ${info.pesel ? `<button type="button" class="zob-id-chip" title="Kopiuj PESEL (oznacza KAWA jako zrobione dziś)" onclick="ZobowiazaniModule.copyId('${info.pesel}', this, ${selectedRowIndex})"><span class="lbl">PESEL</span>${info.pesel}</button>` : ''}
+            ${info.nip ? `<button type="button" class="zob-id-chip" title="Kopiuj NIP (oznacza KAWA jako zrobione dziś)" onclick="ZobowiazaniModule.copyId('${info.nip}', this, ${selectedRowIndex})"><span class="lbl">NIP</span>${info.nip}</button>` : ''}
             ${info.adresStr ? `<button type="button" class="zob-open-addr" title="Kopiuj adres" onclick="ZobowiazaniModule.copy(decodeURIComponent('${encodeURIComponent(info.adresStr)}'), this)">${escapeHtml(info.adresStr)}</button>` : ''}
           </div>` : ''}
           <div class="zob-open-sub"><span class="zob-status-chip ${st.cls}">${st.label}</span>${rowZawieszone(r) ? ` · od ${escapeHtml(rowZawieszone(r))}` : ''} · ${sysCount}/5 systemów · #${selectedRowIndex + 1}${cepik ? ' · 🚗 CEPIK' : ''}${defer ? ` · <span class="zob-defer-chip ${defer.due ? 'due' : 'wait'}">${defer.due ? 'Do powrotu' : 'Na później'} ${escapeHtml(defer.raw)}</span>` : ''}</div>
@@ -3100,6 +3130,7 @@ const ZobowiazaniModule = (() => {
     expandMajatek,
     copyCleanExcel: copyCleanExcelText,
     copy: copyToClipboard,
+    copyId: copyIdAndMarkKawa,
     loadJsonFile: triggerFilePicker,
     refreshFromArkusz,
     deferDays: deferByDays,
