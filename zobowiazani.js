@@ -1072,7 +1072,16 @@ const ZobowiazaniModule = (() => {
     }
   }
 
-  function renderMajatekHtml(info, row) {
+  function captureMajOpenState() {
+    const openSet = new Set();
+    document.querySelectorAll('#zob-detail-content .zob-maj-sec.open').forEach(el => {
+      if (el.id) openSet.add(el.id);
+    });
+    return openSet;
+  }
+
+  function renderMajatekHtml(info, row, prevOpenMaj) {
+    const openMaj = prevOpenMaj || new Set();
     const hasWro = typeof WroModule !== 'undefined';
     const suspended = row ? isSuspendedRow(row) : false;
     const found = hasWro ? majatekSnapshotForInfo(info) : { pk: '', snap: null };
@@ -1199,7 +1208,7 @@ const ZobowiazaniModule = (() => {
         ? `<span class="zob-asset-n" style="background:rgba(139,58,58,.12);color:var(--zob-spine)">do zajęcia ${pendingN}</span>`
         : '';
 
-      return `<section class="zob-maj-sec" id="${sid}" data-maj-sec="${sid}">
+      return `<section class="zob-maj-sec${openMaj.has(sid) ? ' open' : ''}" id="${sid}" data-maj-sec="${sid}">
         <button type="button" class="zob-maj-sec-hd" onclick="this.parentElement.classList.toggle('open')">
           <span class="zob-maj-sec-left">${icon} ${escapeHtml(label)} <span class="zob-asset-n">${rows.length}</span>${pendingBadge}${suspended && isAction ? ' <span class="zob-asset-n" style="background:rgba(122,85,36,.18);color:#7a5524">⏸</span>' : ''}</span>
           <span class="zob-maj-arrow">▼</span>
@@ -1692,7 +1701,7 @@ const ZobowiazaniModule = (() => {
                 Do powrotu <span class="zob-pill-count">${counts.due}</span>
               </button>
               ${counts.wroNew > 0 ? `
-                <button class="zob-pill pill-danger ${activeFilter === 'wro_new' ? 'active' : ''}" onclick="ZobowiazaniModule.setFilter('wro_new')" title="Osoby z wpisami do zajęcia — bank/JPK/AUM bez Zrobione lub Wyklucz. Po nowej synchronizacji zostają tylko nowe, jeszcze nieoznaczone.">
+                <button class="zob-pill pill-danger ${activeFilter === 'wro_new' ? 'active' : ''}" id="zob-wro-new-pill" onclick="ZobowiazaniModule.setFilter('wro_new')" title="Osoby z wpisami do zajęcia — bank/JPK/AUM bez Zrobione lub Wyklucz. Po nowej synchronizacji zostają tylko nowe, jeszcze nieoznaczone.">
                   🔥 Nowość WRO <span class="zob-pill-count">${counts.wroNew}</span>
                 </button>
               ` : ''}
@@ -1892,6 +1901,22 @@ const ZobowiazaniModule = (() => {
     } else if (freshBtn) {
       freshBtn.remove();
       if (activeFilter === 'fresh') activeFilter = 'all';
+    }
+    let wroNewBtn = document.getElementById('zob-wro-new-pill');
+    if (counts.wroNew > 0) {
+      if (!wroNewBtn) {
+        wroNewBtn = document.createElement('button');
+        wroNewBtn.id = 'zob-wro-new-pill';
+        wroNewBtn.className = 'zob-pill pill-danger';
+        wroNewBtn.title = 'Osoby z wpisami do zajęcia — bank/JPK/AUM bez Zrobione lub Wyklucz. Po nowej synchronizacji zostają tylko nowe, jeszcze nieoznaczone.';
+        wroNewBtn.setAttribute('onclick', "ZobowiazaniModule.setFilter('wro_new')");
+        const sep = bar.querySelector('.zob-pill-sep');
+        bar.insertBefore(wroNewBtn, sep || null);
+      }
+      wroNewBtn.innerHTML = `🔥 Nowość WRO <span class="zob-pill-count">${counts.wroNew}</span>`;
+    } else if (wroNewBtn) {
+      wroNewBtn.remove();
+      if (activeFilter === 'wro_new') activeFilter = 'all';
     }
     let firstBtn = document.getElementById('zob-wro-first-pill');
     if (counts.wroFirst > 0) {
@@ -2343,7 +2368,7 @@ const ZobowiazaniModule = (() => {
         `;
       }
     } else if (detailTab === 'majatek') {
-      bodyHtml = renderMajatekHtml(info, r);
+      bodyHtml = renderMajatekHtml(info, r, captureMajOpenState());
     } else {
       bodyHtml = `
         <div class="zob-sheet">
