@@ -1817,6 +1817,10 @@ const WroModule = (() => {
     const pop = document.getElementById('wro-annot-pop');
     if (pop) pop.style.display = 'none';
 
+    // Odznaki na liście (🔥 do zajęcia / 🎯 nowe do zajęcia) muszą się od razu
+    // zaktualizować — bez tego licznik "do zajęcia" wygląda, jakby oznaczenie
+    // Zrobione/Wyklucz nic nie zmieniało, dopóki ktoś nie przeładuje strony.
+    renderList(document.getElementById('wro-search')?.value || '');
     if (currentActiveId) renderEntityContent(currentActiveId, null);
     showToast(
       status === 'done' ? '✅ Oznaczono jako zrobione' :
