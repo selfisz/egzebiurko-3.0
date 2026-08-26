@@ -1497,6 +1497,8 @@ const ZobowiazaniModule = (() => {
       });
     } else if (activeFilter === 'has_cepik') {
       rowsWithIndex = rowsWithIndex.filter(item => !!getCepikForPerson(item.info));
+    } else if (activeFilter === 'wro_new_pending') {
+      rowsWithIndex = rowsWithIndex.filter(item => wroFlagsForKey(item.key).newPending);
     } else if (activeFilter === 'wro_new') {
       rowsWithIndex = rowsWithIndex.filter(item => wroFlagsForKey(item.key).pending);
     } else if (activeFilter === 'wro_ognivo') {
@@ -1590,14 +1592,14 @@ const ZobowiazaniModule = (() => {
   }
 
   function computeFilterCounts() {
-    if (!dbSheet || !dbSheet.rows) return { all: 0, todo: 0, progress: 0, complete: 0, cepik: 0, deferred: 0, due: 0, wroNew: 0, wroFirst: 0, wroOgnivo: 0 };
+    if (!dbSheet || !dbSheet.rows) return { all: 0, todo: 0, progress: 0, complete: 0, cepik: 0, deferred: 0, due: 0, wroNew: 0, wroFirst: 0, wroOgnivo: 0, wroNewPending: 0 };
     // Skanowanie całej listy jest tanie samo w sobie, ale jest wołane po każdej
     // drobnej akcji — cache'ujemy wynik i liczymy od nowa tylko gdy coś, co
     // wpływa na liczniki, faktycznie się zmieniło (patrz: _countsDirty).
     if (!_countsDirty && _countsCache && _countsCache.rowsRef === dbSheet.rows) {
       return _countsCache.counts;
     }
-    let todo = 0, progress = 0, complete = 0, cepikCount = 0, deferred = 0, due = 0, wroNew = 0, wroFirst = 0, wroOgnivo = 0;
+    let todo = 0, progress = 0, complete = 0, cepikCount = 0, deferred = 0, due = 0, wroNew = 0, wroFirst = 0, wroOgnivo = 0, wroNewPending = 0;
     let scoped = 0;
     dbSheet.rows.forEach(r => {
       const key = personKeyFromRow(r);
@@ -1631,15 +1633,18 @@ const ZobowiazaniModule = (() => {
       if (wroFlagsForKey(key).firstSeen) {
         wroFirst++;
       }
+      if (!archived && !isSuspendedRow(r) && wroFlagsForKey(key).newPending) {
+        wroNewPending++;
+      }
     });
-    const counts = { all: scoped, todo, progress, complete, cepik: cepikCount, deferred, due, wroNew, wroFirst, wroOgnivo };
+    const counts = { all: scoped, todo, progress, complete, cepik: cepikCount, deferred, due, wroNew, wroFirst, wroOgnivo, wroNewPending };
     _countsCache = { rowsRef: dbSheet.rows, counts };
     _countsDirty = false;
     return counts;
   }
 
   function wroFlagsForKey(key) {
-    const empty = { sources: [], dochodMax: 0, pending: false, pendingOgnivo: false, firstSeen: false };
+    const empty = { sources: [], dochodMax: 0, pending: false, pendingOgnivo: false, firstSeen: false, newPending: false };
     if (!key) return empty;
     if (_wroFlagCache.has(key)) return _wroFlagCache.get(key);
     const flags = (typeof WroModule !== 'undefined' && WroModule.getPersonWroFlags)
@@ -1647,6 +1652,7 @@ const ZobowiazaniModule = (() => {
       : empty;
     if (typeof flags.firstSeen !== 'boolean') flags.firstSeen = false;
     if (typeof flags.pendingOgnivo !== 'boolean') flags.pendingOgnivo = false;
+    if (typeof flags.newPending !== 'boolean') flags.newPending = flags.firstSeen && flags.pending;
     _wroFlagCache.set(key, flags);
     return flags;
   }
@@ -1726,6 +1732,7 @@ const ZobowiazaniModule = (() => {
               <button class="zob-action-btn primary" onclick="ZobowiazaniModule.loadJsonFile()" title="Wczytaj bazę z pliku JSON / JS">Wczytaj bazę</button>
               <button class="zob-action-btn ${filtersOpen ? 'is-on' : ''}" onclick="ZobowiazaniModule.toggleFilters()" title="Pokaż / ukryj filtry">Filtry${activeFilter !== 'all' || filterText || sourceFilters.size ? ' ·' : ''}</button>
               <button class="zob-action-btn" onclick="ZobowiazaniModule.refreshFromArkusz()" title="Pobierz aktualną bazę z Arkusza">Odśwież</button>
+              <button class="zob-action-btn" onclick="window.showEgzLegend && window.showEgzLegend()" title="Objaśnienie wszystkich odznak i filtrów (nowość, brak w Szafce, brak wcześniej...)">❓ Legenda</button>
               <button class="zob-action-btn olive" onclick="ZobowiazaniModule.copyCleanExcel()" title="Kopiuje widoczne teczki jako czysty tekst do Excela">Do Excela</button>
             </div>
           </div>
@@ -1775,8 +1782,14 @@ const ZobowiazaniModule = (() => {
               <button class="zob-pill pill-warn ${activeFilter === 'due' ? 'active' : ''}" onclick="ZobowiazaniModule.setFilter('due')">
                 Do powrotu <span class="zob-pill-count">${counts.due}</span>
               </button>
+              ${(counts.wroNew > 0 || counts.wroOgnivo > 0 || counts.wroFirst > 0 || counts.wroNewPending > 0) ? '<span class="zob-pill-glabel" id="zob-wro-glabel" title="Filtry pochodzące z Analityki WRO">WRO:</span>' : ''}
+              ${counts.wroNewPending > 0 ? `
+                <button class="zob-pill pill-hot ${activeFilter === 'wro_new_pending' ? 'active' : ''}" id="zob-wro-newpending-pill" onclick="ZobowiazaniModule.setFilter('wro_new_pending')" title="Najważniejszy filtr po wgraniu nowej bazy: podmioty, których NIE było wcześniej I mają coś nieoznaczonego (bank/JPK/AUM bez Zrobione/Wyklucz).">
+                  🎯 Nowe do zajęcia <span class="zob-pill-count">${counts.wroNewPending}</span>
+                </button>
+              ` : ''}
               ${counts.wroNew > 0 ? `
-                <button class="zob-pill pill-danger ${activeFilter === 'wro_new' ? 'active' : ''}" id="zob-wro-new-pill" onclick="ZobowiazaniModule.setFilter('wro_new')" title="Osoby z wpisami do zajęcia — bank/JPK/AUM bez Zrobione lub Wyklucz. Po nowej synchronizacji zostają tylko nowe, jeszcze nieoznaczone.">
+                <button class="zob-pill pill-danger ${activeFilter === 'wro_new' ? 'active' : ''}" id="zob-wro-new-pill" onclick="ZobowiazaniModule.setFilter('wro_new')" title="Wszyscy z wpisami do zajęcia — bank/JPK/AUM bez Zrobione lub Wyklucz (także ci, którzy byli już wcześniej w bazie).">
                   🔥 Nowość WRO <span class="zob-pill-count">${counts.wroNew}</span>
                 </button>
               ` : ''}
@@ -1786,13 +1799,13 @@ const ZobowiazaniModule = (() => {
                 </button>
               ` : ''}
               ${counts.wroFirst > 0 ? `
-                <button class="zob-pill pill-ok ${activeFilter === 'wro_first' ? 'active' : ''}" id="zob-wro-first-pill" onclick="ZobowiazaniModule.setFilter('wro_first')" title="Osoby z ostatniego raportu WRO, które nie miały wcześniej wpisu w bazie ani w Majątku. To nie to samo co 🔥 Nowość WRO.">
+                <button class="zob-pill pill-ok ${activeFilter === 'wro_first' ? 'active' : ''}" id="zob-wro-first-pill" onclick="ZobowiazaniModule.setFilter('wro_first')" title="Osoby z ostatniego raportu WRO, które nie miały wcześniej wpisu w bazie ani w Majątku — samo pojawienie się, niezależnie czy jest coś do zajęcia.">
                   🆕 Bez wcześniejszego wpisu <span class="zob-pill-count">${counts.wroFirst}</span>
                 </button>
               ` : ''}
               ${freshKeys.size ? `
-                <button class="zob-pill pill-ok ${activeFilter === 'fresh' ? 'active' : ''}" onclick="ZobowiazaniModule.setFilter('fresh')" id="zob-fresh-pill">
-                  Nowe <span class="zob-pill-count">${freshKeys.size}</span>
+                <button class="zob-pill pill-ok ${activeFilter === 'fresh' ? 'active' : ''}" onclick="ZobowiazaniModule.setFilter('fresh')" id="zob-fresh-pill" title="Wiersze, które przed chwilą przybyły z Excela/Arkusza — nie ma to związku z raportami WRO.">
+                  🗂 Nowe w Arkuszu <span class="zob-pill-count">${freshKeys.size}</span>
                 </button>
               ` : ''}
               ${counts.cepik > 0 ? `
@@ -1967,20 +1980,37 @@ const ZobowiazaniModule = (() => {
     syncExtraFilterButtons();
     const bar = document.getElementById('zob-pills-bar');
     if (!bar) return;
-    let freshBtn = document.getElementById('zob-fresh-pill');
-    if (freshKeys.size) {
-      if (!freshBtn) {
-        freshBtn = document.createElement('button');
-        freshBtn.id = 'zob-fresh-pill';
-        freshBtn.className = 'zob-pill pill-ok';
-        freshBtn.setAttribute('onclick', "ZobowiazaniModule.setFilter('fresh')");
+    // Grupa pigułek "WRO:" — etykieta pojawia się/znika razem z pierwszą/ostatnią
+    // z czterech pigułek poniżej, żeby wizualnie oddzielić je od reszty (Braki/
+    // W toku/Komplet/Brak KAWA...) i nie mylić dwóch różnych światów "nowość".
+    const anyWro = counts.wroNewPending > 0 || counts.wroNew > 0 || counts.wroOgnivo > 0 || counts.wroFirst > 0;
+    let wroLabel = document.getElementById('zob-wro-glabel');
+    if (anyWro && !wroLabel) {
+      wroLabel = document.createElement('span');
+      wroLabel.id = 'zob-wro-glabel';
+      wroLabel.className = 'zob-pill-glabel';
+      wroLabel.title = 'Filtry pochodzące z Analityki WRO';
+      wroLabel.textContent = 'WRO:';
+      const sep = bar.querySelector('.zob-pill-sep');
+      bar.insertBefore(wroLabel, sep || null);
+    } else if (!anyWro && wroLabel) {
+      wroLabel.remove();
+    }
+    let wroNewPendingBtn = document.getElementById('zob-wro-newpending-pill');
+    if (counts.wroNewPending > 0) {
+      if (!wroNewPendingBtn) {
+        wroNewPendingBtn = document.createElement('button');
+        wroNewPendingBtn.id = 'zob-wro-newpending-pill';
+        wroNewPendingBtn.className = 'zob-pill pill-hot';
+        wroNewPendingBtn.title = 'Najważniejszy filtr po wgraniu nowej bazy: podmioty, których NIE było wcześniej I mają coś nieoznaczonego (bank/JPK/AUM bez Zrobione/Wyklucz).';
+        wroNewPendingBtn.setAttribute('onclick', "ZobowiazaniModule.setFilter('wro_new_pending')");
         const sep = bar.querySelector('.zob-pill-sep');
-        bar.insertBefore(freshBtn, sep || null);
+        bar.insertBefore(wroNewPendingBtn, sep || null);
       }
-      freshBtn.innerHTML = `Nowe <span class="zob-pill-count">${freshKeys.size}</span>`;
-    } else if (freshBtn) {
-      freshBtn.remove();
-      if (activeFilter === 'fresh') activeFilter = 'all';
+      wroNewPendingBtn.innerHTML = `🎯 Nowe do zajęcia <span class="zob-pill-count">${counts.wroNewPending}</span>`;
+    } else if (wroNewPendingBtn) {
+      wroNewPendingBtn.remove();
+      if (activeFilter === 'wro_new_pending') activeFilter = 'all';
     }
     let wroNewBtn = document.getElementById('zob-wro-new-pill');
     if (counts.wroNew > 0) {
@@ -1988,7 +2018,7 @@ const ZobowiazaniModule = (() => {
         wroNewBtn = document.createElement('button');
         wroNewBtn.id = 'zob-wro-new-pill';
         wroNewBtn.className = 'zob-pill pill-danger';
-        wroNewBtn.title = 'Osoby z wpisami do zajęcia — bank/JPK/AUM bez Zrobione lub Wyklucz. Po nowej synchronizacji zostają tylko nowe, jeszcze nieoznaczone.';
+        wroNewBtn.title = 'Wszyscy z wpisami do zajęcia — bank/JPK/AUM bez Zrobione lub Wyklucz (także ci, którzy byli już wcześniej w bazie).';
         wroNewBtn.setAttribute('onclick', "ZobowiazaniModule.setFilter('wro_new')");
         const sep = bar.querySelector('.zob-pill-sep');
         bar.insertBefore(wroNewBtn, sep || null);
@@ -2020,7 +2050,7 @@ const ZobowiazaniModule = (() => {
         firstBtn = document.createElement('button');
         firstBtn.id = 'zob-wro-first-pill';
         firstBtn.className = 'zob-pill pill-ok';
-        firstBtn.title = 'Osoby z ostatniego raportu WRO, które nie miały wcześniej wpisu w bazie ani w Majątku. To nie to samo co 🔥 Nowość WRO.';
+        firstBtn.title = 'Osoby z ostatniego raportu WRO, które nie miały wcześniej wpisu w bazie ani w Majątku — samo pojawienie się, niezależnie czy jest coś do zajęcia.';
         firstBtn.setAttribute('onclick', "ZobowiazaniModule.setFilter('wro_first')");
         const sep = bar.querySelector('.zob-pill-sep');
         bar.insertBefore(firstBtn, sep || null);
@@ -2029,6 +2059,22 @@ const ZobowiazaniModule = (() => {
     } else if (firstBtn) {
       firstBtn.remove();
       if (activeFilter === 'wro_first') activeFilter = 'all';
+    }
+    let freshBtn = document.getElementById('zob-fresh-pill');
+    if (freshKeys.size) {
+      if (!freshBtn) {
+        freshBtn = document.createElement('button');
+        freshBtn.id = 'zob-fresh-pill';
+        freshBtn.className = 'zob-pill pill-ok';
+        freshBtn.title = 'Wiersze, które przed chwilą przybyły z Excela/Arkusza — nie ma to związku z raportami WRO.';
+        freshBtn.setAttribute('onclick', "ZobowiazaniModule.setFilter('fresh')");
+        const sep = bar.querySelector('.zob-pill-sep');
+        bar.insertBefore(freshBtn, sep || null);
+      }
+      freshBtn.innerHTML = `🗂 Nowe w Arkuszu <span class="zob-pill-count">${freshKeys.size}</span>`;
+    } else if (freshBtn) {
+      freshBtn.remove();
+      if (activeFilter === 'fresh') activeFilter = 'all';
     }
     bar.querySelectorAll('.zob-pill').forEach(btn => {
       const onclick = btn.getAttribute('onclick') || '';

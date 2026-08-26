@@ -14,6 +14,7 @@ const WroModule = (() => {
   let activeFilters = new Set();
   let filterNoFolder = false;
   let filterFirstSeen = false;
+  let filterNewPending = false;
   let currentActiveId = null;
   let activated   = false;
   let _currentAnnotBid = null;
@@ -290,6 +291,50 @@ const WroModule = (() => {
   function getPendingGoneCount() {
     return loadMajatekStore().pendingGone.length;
   }
+
+  /* ─── „DO ZAJĘCIA” NA ŻYWO (bez czekania na sync z Szafką) ──
+     Licznik/filtr w samej Analityce WRO (lista po lewej) musi działać od razu
+     po wgraniu pliku, zanim ktokolwiek kliknie „Synchronizuj z Szafką” — bo
+     to właśnie wtedy użytkownik chce zobaczyć „co nowego i do zrobienia”.
+     hasPendingItemsForKey/getMajatekSnapshot korzystają z zapisanego stanu
+     Szafki, więc dla świeżo wczytanej bazy liczą 0. Tu liczymy wprost z
+     wczytanej bazy (bazaDanych) — ten sam mechanizm (sectionsHavePending),
+     inne źródło danych. Wynik jest cache'owany per id i czyszczony przy
+     zmianie adnotacji (_annotVersion) lub wczytaniu nowej bazy. ─── */
+  let _pendingLiveCache = new Map();
+  let _pendingLiveCacheVer = -1;
+  function invalidatePendingCache() {
+    _pendingLiveCache = new Map();
+    _pendingLiveCacheVer = -1;
+  }
+  function entityHasPendingLive(id) {
+    if (_pendingLiveCacheVer !== _annotVersion) {
+      _pendingLiveCache = new Map();
+      _pendingLiveCacheVer = _annotVersion;
+    }
+    if (_pendingLiveCache.has(id)) return _pendingLiveCache.get(id);
+    const pk = personKeyForEntity(id);
+    let result = false;
+    if (pk && !(typeof ZobowiazaniModule !== 'undefined' && typeof ZobowiazaniModule.isSuspended === 'function' && ZobowiazaniModule.isSuspended(pk))) {
+      try { result = sectionsHavePending(pk, entitySectionsSnapshot(id), id); } catch { result = false; }
+    }
+    _pendingLiveCache.set(id, result);
+    return result;
+  }
+  function entityIsNewPending(id) {
+    const pk = personKeyForEntity(id);
+    return !!pk && isFirstSeenPerson(pk) && entityHasPendingLive(id);
+  }
+  function countNewPending() {
+    const firstSet = firstSeenKeySet();
+    if (!firstSet.size) return 0;
+    let n = 0;
+    entities.forEach(({ id }) => {
+      const pk = personKeyForEntity(id);
+      if (pk && firstSet.has(pk) && entityHasPendingLive(id)) n++;
+    });
+    return n;
+  }
   function getSourceCatalog() {
     return matrixColumns.map(k => ({ key: k, icon: icons[k] || '📄', safe: k.replace(/[^a-zA-Z0-9]/g, ''), label: k.replace('Wynik: ', '') }));
   }
@@ -370,16 +415,20 @@ const WroModule = (() => {
   function getPersonWroFlags(personKey) {
     const pk = digitsId(personKey);
     const firstSeen = isFirstSeenPerson(pk);
-    if (!pk) return { sources: [], dochodMax: 0, pending: false, pendingOgnivo: false, firstSeen: false };
+    if (!pk) return { sources: [], dochodMax: 0, pending: false, pendingOgnivo: false, firstSeen: false, newPending: false };
     const snap = getMajatekSnapshot(pk);
-    if (!snap || !snap.sections) return { sources: [], dochodMax: 0, pending: false, pendingOgnivo: false, firstSeen };
+    if (!snap || !snap.sections) return { sources: [], dochodMax: 0, pending: false, pendingOgnivo: false, firstSeen, newPending: false };
     const suspended = typeof ZobowiazaniModule !== 'undefined' && typeof ZobowiazaniModule.isSuspended === 'function' && ZobowiazaniModule.isSuspended(pk);
+    const pending = suspended ? false : sectionsHavePending(pk, snap.sections, snap.entityId);
     return {
       sources: Object.keys(snap.sections),
       dochodMax: snap.dochodMax || 0,
-      pending: suspended ? false : sectionsHavePending(pk, snap.sections, snap.entityId),
+      pending,
       pendingOgnivo: suspended ? false : sectionsHavePending(pk, snap.sections, snap.entityId, true),
-      firstSeen
+      firstSeen,
+      // Dokładnie to, o co pyta użytkownik po wgraniu nowej bazy: podmiot,
+      // którego nie było wcześniej, I ma coś nieoznaczonego do sprawdzenia.
+      newPending: firstSeen && pending
     };
   }
 
@@ -397,6 +446,22 @@ const WroModule = (() => {
     renderList(document.getElementById('wro-search')?.value || '');
     if (typeof ZobowiazaniModule !== 'undefined' && typeof ZobowiazaniModule.setFilter === 'function') {
       ZobowiazaniModule.setFilter('wro_first');
+    }
+  }
+
+  function showLegend() {
+    if (typeof window.showEgzLegend === 'function') window.showEgzLegend();
+  }
+
+  function filterNewPendingOnly() {
+    filterNewPending = true;
+    filterFirstSeen = false;
+    filterNoFolder = false;
+    activeFilters.clear();
+    initFilters();
+    renderList(document.getElementById('wro-search')?.value || '');
+    if (typeof ZobowiazaniModule !== 'undefined' && typeof ZobowiazaniModule.setFilter === 'function') {
+      ZobowiazaniModule.setFilter('wro_new_pending');
     }
   }
 
@@ -476,7 +541,8 @@ const WroModule = (() => {
       missing: missingList,
       news: newsN,
       goneCount: store.pendingGone.length,
-      firstSeen: firstSeenKeySet().size
+      firstSeen: firstSeenKeySet().size,
+      newPending: countNewPending()
     });
   }
 
@@ -501,21 +567,30 @@ const WroModule = (() => {
           ${summary.missing.length > 25 ? `<div style="padding:6px 6px 0;font-size:.75rem">…i ${summary.missing.length - 25} więcej — użyj filtra „Brak w Szafce” w WRO.</div>` : ''}
         </div>`
       : '';
+    const newPending = summary.newPending || 0;
+    const leadHtml = newPending > 0 ? `
+          <div class="wro-ldlg-lead" onclick="document.getElementById('wro-sync-dlg').style.display='none';WroModule.filterNewPendingOnly()">
+            <div class="wro-ldlg-lead-num">🎯 ${newPending}</div>
+            <div class="wro-ldlg-lead-txt">
+              <strong>Nowe do zajęcia</strong> — tylu podmiotów nie było wcześniej I mają coś nieoznaczonego.<br>To najważniejsza liczba po wgraniu raportu — kliknij, aby je zobaczyć.
+            </div>
+          </div>` : '';
     dlg.innerHTML = `
       <div class="wro-ldlg-overlay" onclick="document.getElementById('wro-sync-dlg').style.display='none'">
         <div class="wro-ldlg-box" onclick="event.stopPropagation()">
-          <div class="wro-ldlg-title">🔄 Synchronizacja z Szafką</div>
+          <div class="wro-ldlg-title">🔄 Synchronizacja z Szafką <span class="wro-ldlg-help" onclick="event.stopPropagation();WroModule.showLegend()" title="Co oznaczają te liczby i odznaki?">❓</span></div>
+          ${leadHtml}
           <div class="wro-ldlg-grid">
             <div class="wro-ldlg-card wro-ldlg-done"><div class="wro-ldlg-num">${summary.added}</div><div class="wro-ldlg-lbl">✅ dodanych</div></div>
             <div class="wro-ldlg-card"><div class="wro-ldlg-num">${summary.updated}</div><div class="wro-ldlg-lbl">🔁 zaktualizowanych</div></div>
-            <div class="wro-ldlg-card wro-ldlg-todo"><div class="wro-ldlg-num">${summary.news}</div><div class="wro-ldlg-lbl">🔥 z nowością</div></div>
+            <div class="wro-ldlg-card wro-ldlg-todo"><div class="wro-ldlg-num">${summary.news}</div><div class="wro-ldlg-lbl">🔥 do zajęcia (wszyscy)</div></div>
             <div class="wro-ldlg-card wro-ldlg-partial"><div class="wro-ldlg-num">${summary.missing.length}</div><div class="wro-ldlg-lbl">📂 brak w Szafce</div></div>
           </div>
           ${missHtml}
-          ${summary.firstSeen > 0 ? `<div class="wro-ldlg-note wro-ldlg-first">🆕 ${summary.firstSeen} osób bez wcześniejszego wpisu (nowe względem poprzedniego raportu / Szafki). To nie to samo co 🔥 nowość — tam są niezałatwione adnotacje.</div>` : ''}
+          ${summary.firstSeen > 0 ? `<div class="wro-ldlg-note wro-ldlg-first">🆕 ${summary.firstSeen} osób bez wcześniejszego wpisu (nowe względem poprzedniego raportu / Szafki) — niezależnie od tego, czy mają coś do zajęcia.</div>` : ''}
           ${summary.goneCount > 0 ? `<div class="wro-ldlg-note wro-ldlg-first">⚠️ ${summary.goneCount} zniknięć do przeglądu — dane, które osoba miała wcześniej, a już ich nie ma w tym raporcie.</div>` : ''}
           <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
-            ${summary.news > 0 ? `<button class="wro-ldlg-close" style="flex:1;background:#b91c1c" onclick="document.getElementById('wro-sync-dlg').style.display='none';WroModule.filterPendingOnly()">Pokaż do zajęcia (${summary.news})</button>` : ''}
+            ${summary.news > 0 ? `<button class="wro-ldlg-close" style="flex:1;background:#b91c1c" onclick="document.getElementById('wro-sync-dlg').style.display='none';WroModule.filterPendingOnly()">Pokaż wszystkich do zajęcia (${summary.news})</button>` : ''}
             ${summary.firstSeen > 0 ? `<button class="wro-ldlg-close" style="flex:1;background:#0f766e" onclick="document.getElementById('wro-sync-dlg').style.display='none';WroModule.filterFirstSeenOnly()">Pokaż bez wcześniejszego wpisu (${summary.firstSeen})</button>` : ''}
             ${summary.goneCount > 0 ? `<button class="wro-ldlg-close" style="flex:1;background:#b45309" onclick="document.getElementById('wro-sync-dlg').style.display='none';WroModule.reviewGoneQueue()">Przejrzyj zniknięcia (${summary.goneCount})</button>` : ''}
             ${summary.missing.length > 0 ? `<button class="wro-ldlg-close" style="flex:1;background:#475569" onclick="document.getElementById('wro-sync-dlg').style.display='none';WroModule.filterMissingFolders()">Filtruj listę: brak w Szafce</button>` : ''}
@@ -630,6 +705,11 @@ const WroModule = (() => {
 
   /* ─── ADNOTACJE NA WYNIKACH ─────────────────────────────── */
   const ANNOT_LS_KEY = 'egze3_wro_annotations';
+  // Wersja adnotacji rośnie przy każdym zapisie — używana do inwalidacji
+  // cache'a „do zajęcia” (entityHasPendingLive), żeby nie liczyć tego samego
+  // w kółko przy każdym przewinięciu listy, a jednocześnie od razu widzieć
+  // zmianę po oznaczeniu wpisu jako Zrobione/Wyklucz.
+  let _annotVersion = 0;
 
   let _annotMem = null;
   function loadAnnotations() {
@@ -640,6 +720,7 @@ const WroModule = (() => {
   }
   function saveAnnotations(obj) {
     _annotMem = obj;
+    _annotVersion++;
     localStorage.setItem(ANNOT_LS_KEY, JSON.stringify(obj));
   }
   function buildAnnotKey(pk, sec, iid) {
@@ -878,6 +959,7 @@ const WroModule = (() => {
   }
 
   function rebuildEntitiesFromBaza() {
+    invalidatePendingCache();
     entities = Object.keys(bazaDanych).map(id => {
       const avail = Object.keys(bazaDanych[id]).filter(k => k !== '_meta' && bazaDanych[id][k].length > 1);
       return { id, availableSources: avail, sourceCount: avail.length };
@@ -949,12 +1031,24 @@ const WroModule = (() => {
       actionSrcs.forEach(src => {
         const rows = data[src];
         const safe = src.replace(/[^a-zA-Z0-9]/g, '');
-        for (let r = 1; r < rows.length; r++) {
-          const fp = rows[r].slice(0, 5).map(v => String(v || '')).join('||');
-          const ann = annots[buildAnnotKey(pk, safe, fp)];
+        const isOg = isOgnivoSource(src);
+        const headers = rows[0];
+        // Banki OGNIVO są oznaczane per-bank (klucz "bank:<kod>"), nie per cały
+        // wiersz — jeśli policzylibyśmy je jak zwykłą sekcję (fingerprint
+        // całego wiersza), już oznaczone banki zawsze wychodziłyby jako "do
+        // zajęcia" (fp się nie zgadza z tym, co realnie zapisano).
+        const bodyRows = isOg ? explodeOgnivoRows(headers, rows.slice(1)) : rows.slice(1);
+        bodyRows.forEach(row => {
+          let ann;
+          if (isOg) {
+            ann = findBankAnnotation(pk, ognivoCanonFromRow(headers, row));
+          } else {
+            const fp = row.slice(0, 5).map(v => String(v || '')).join('||');
+            ann = annots[buildAnnotKey(pk, safe, fp)];
+          }
           if (ann && (ann.status === 'done' || ann.status === 'excluded')) known++;
           else todo++;
-        }
+        });
       });
 
       if (known === 0) result.noAnnotations++;
@@ -973,11 +1067,20 @@ const WroModule = (() => {
     }
     const { total, withActions, allKnown, partiallyKnown, noAnnotations, noActionSections } = summary;
     const hasAnyAnnot = allKnown + partiallyKnown > 0;
+    const newPending = summary.newPending || 0;
+    const leadHtml = newPending > 0 ? `
+          <div class="wro-ldlg-lead" onclick="document.getElementById('wro-load-dlg').style.display='none';WroModule.filterNewPendingOnly()">
+            <div class="wro-ldlg-lead-num">🎯 ${newPending}</div>
+            <div class="wro-ldlg-lead-txt">
+              <strong>Nowe do zajęcia</strong> — tylu podmiotów nie było wcześniej I mają coś nieoznaczonego.<br>To najważniejsza liczba po wgraniu raportu — kliknij, aby je zobaczyć.
+            </div>
+          </div>` : '';
 
     dlg.innerHTML = `
       <div class="wro-ldlg-overlay" onclick="document.getElementById('wro-load-dlg').style.display='none'">
         <div class="wro-ldlg-box" onclick="event.stopPropagation()">
-          <div class="wro-ldlg-title">📊 Podsumowanie wczytanego pliku</div>
+          <div class="wro-ldlg-title">📊 Podsumowanie wczytanego pliku <span class="wro-ldlg-help" onclick="event.stopPropagation();WroModule.showLegend()" title="Co oznaczają te liczby i odznaki?">❓</span></div>
+          ${leadHtml}
           <div class="wro-ldlg-grid">
             <div class="wro-ldlg-card">
               <div class="wro-ldlg-num">${total}</div>
@@ -997,7 +1100,7 @@ const WroModule = (() => {
             </div>
           </div>
           ${noActionSections > 0 ? `<div class="wro-ldlg-note">${noActionSections} podmiotów bez sekcji wynikowych (OGNIVO/AUM/JPK)</div>` : ''}
-          ${summary.firstSeen > 0 ? `<div class="wro-ldlg-note wro-ldlg-first">🆕 ${summary.firstSeen} osób nie miało wcześniej wpisu — nie było ich w poprzedniej bazie ani w Majątku Szafki. To nie filtr 🔥 Nowość WRO (niezałatwione adnotacje).</div>` : ''}
+          ${summary.firstSeen > 0 ? `<div class="wro-ldlg-note wro-ldlg-first">🆕 ${summary.firstSeen} osób nie miało wcześniej wpisu — nie było ich w poprzedniej bazie ani w Majątku Szafki (niezależnie, czy mają coś do zajęcia).</div>` : ''}
           ${!hasAnyAnnot ? `<div class="wro-ldlg-note wro-ldlg-first">ℹ️ Brak zapisanych adnotacji — to pierwsze wczytanie lub nowe urządzenie. Oznaczaj wpisy statusami aby przy kolejnym wczytaniu system pokazał delta.</div>` : ''}
           <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
             ${summary.firstSeen > 0 ? `<button class="wro-ldlg-close" style="flex:1;background:#0f766e" onclick="document.getElementById('wro-load-dlg').style.display='none';WroModule.filterFirstSeenOnly()">Pokaż tylko bez wcześniejszego wpisu (${summary.firstSeen})</button>` : ''}
@@ -1034,7 +1137,7 @@ const WroModule = (() => {
           'success'
         );
         if (typeof ZobowiazaniModule !== 'undefined' && ZobowiazaniModule.refreshAfterWroSync) ZobowiazaniModule.refreshAfterWroSync();
-        showLoadSummaryDialog({ ...computeLoadSummary(), firstSeen: first.length });
+        showLoadSummaryDialog({ ...computeLoadSummary(), firstSeen: first.length, newPending: countNewPending() });
       } catch(err) {
         showToast('❌ Błąd pliku bazy danych!', 'error');
       }
@@ -1070,10 +1173,30 @@ const WroModule = (() => {
     const fc = document.getElementById('wro-filters');
     if (!fc) return;
     fc.innerHTML = '';
+
+    const legendBtn = document.createElement('div');
+    legendBtn.className = 'wro-chip wro-chip-legend';
+    legendBtn.innerHTML = '❓ Co znaczą te odznaki?';
+    legendBtn.title = 'Objaśnienie wszystkich odznak i filtrów (Analityka WRO + Szafka teczek)';
+    legendBtn.onclick = () => showLegend();
+    fc.appendChild(legendBtn);
+
+    const newPendingChip = document.createElement('div');
+    newPendingChip.id = 'wro-chip-newpending';
+    newPendingChip.className = 'wro-chip wro-chip-hot' + (filterNewPending ? ' active' : '');
+    newPendingChip.innerHTML = '🎯 Nowe do zajęcia';
+    newPendingChip.title = 'Najważniejszy filtr po wgraniu nowej bazy: podmioty, których NIE było wcześniej (w poprzednim raporcie ani w Majątku Szafki) I mają coś nieoznaczonego (Zrobione/Wyklucz) w OGNIVO/AUM/JPK.';
+    newPendingChip.onclick = () => {
+      filterNewPending = !filterNewPending;
+      newPendingChip.classList.toggle('active', filterNewPending);
+      renderList(document.getElementById('wro-search')?.value || '');
+    };
+    fc.appendChild(newPendingChip);
+
     const noFolderChip = document.createElement('div');
     noFolderChip.className = 'wro-chip wro-chip-warn' + (filterNoFolder ? ' active' : '');
     noFolderChip.innerHTML = '🗂 Brak w Szafce';
-    noFolderChip.title = 'Podmioty bez dopasowanego rekordu (PESEL/NIP) w Szafce';
+    noFolderChip.title = 'Podmioty bez dopasowanego rekordu (PESEL/NIP) w Szafce — to kwestia dopasowania kartoteki, nie ma związku z tym, czy jest coś do zajęcia.';
     noFolderChip.onclick = () => {
       filterNoFolder = !filterNoFolder;
       noFolderChip.classList.toggle('active', filterNoFolder);
@@ -1084,7 +1207,7 @@ const WroModule = (() => {
     firstChip.id = 'wro-chip-first';
     firstChip.className = 'wro-chip wro-chip-first' + (filterFirstSeen ? ' active' : '');
     firstChip.innerHTML = '🆕 Bez wcześniejszego wpisu';
-    firstChip.title = 'Osoby z wczytanego raportu, których nie było w poprzedniej bazie ani w Majątku Szafki. To nie to samo co 🔥 Nowość WRO (niezałatwione adnotacje).';
+    firstChip.title = 'Osoby z wczytanego raportu, których nie było w poprzedniej bazie ani w Majątku Szafki — samo pojawienie się, niezależnie czy mają coś do zajęcia. Do połączenia obu warunków użyj „🎯 Nowe do zajęcia”.';
     firstChip.onclick = () => {
       filterFirstSeen = !filterFirstSeen;
       firstChip.classList.toggle('active', filterFirstSeen);
@@ -1136,6 +1259,7 @@ const WroModule = (() => {
         if (view.person) return false;
       }
       if (filterFirstSeen && !isFirstSeenPerson(personKeyForEntity(item.id))) return false;
+      if (filterNewPending && !entityIsNewPending(item.id)) return false;
       if (!lf) return true;
       const view = item._view || resolveEntityView(item.id, arkIndex);
       item._view = view;
@@ -1158,9 +1282,18 @@ const WroModule = (() => {
     const view = item._view || resolveEntityView(item.id);
     const stubMark = view.stub ? '<span class="wro-stub-chip" title="Tylko OGNIVO/AUM — brak raportu WRO">bez WRO</span>' : '';
     const fromArk = view.person ? '<span class="wro-stub-chip ark" title="Dopasowano z Arkusza">w Szafce</span>' : '';
-    const firstMark = isFirstSeenPerson(personKeyForEntity(item.id))
-      ? '<span class="wro-stub-chip first" title="Nie było tej osoby w poprzednim raporcie ani w Majątku Szafki">nowy wpis</span>'
-      : '';
+    const isFirst = isFirstSeenPerson(personKeyForEntity(item.id));
+    const isPending = entityHasPendingLive(item.id);
+    // Jedna, jednoznaczna odznaka zamiast dwóch osobnych — żeby od razu było
+    // widać, czy to "tylko się pojawiło", "tylko trzeba zająć" czy oba naraz
+    // (to jest dokładnie to, co ma pokazać filtr 🎯 Nowe do zajęcia).
+    const firstMark = (isFirst && isPending)
+      ? '<span class="wro-stub-chip hot" title="Nie było tej osoby wcześniej I ma nieoznaczone wyniki OGNIVO/AUM/JPK — to jest to, czego szukasz po wgraniu nowej bazy">🎯 nowe do zajęcia</span>'
+      : isFirst
+        ? '<span class="wro-stub-chip first" title="Nie było tej osoby w poprzednim raporcie ani w Majątku Szafki (ale to niekoniecznie znaczy, że ma coś do zajęcia)">nowy wpis</span>'
+        : isPending
+          ? '<span class="wro-stub-chip pending" title="Ma wyniki OGNIVO/AUM/JPK bez statusu Zrobione/Wyklucz">🔥 do zajęcia</span>'
+          : '';
     const folderIco = `<span class="wro-icon-jump wro-open-teczka" data-entity="${escWro(item.id)}" data-open-teczka="1" title="${view.person ? 'Otwórz teczkę w Szafce' : 'Szukaj teczki w Szafce'}">📂</span>`;
     const statusBadges = (inCart ? '🛒 ' : '') + (isAnalyzed ? '✅' : '');
     const maxDochod = item.availableSources.includes('Dochody') ? getMaxDochodForEntity(item.id) : 0;
@@ -1813,7 +1946,16 @@ const WroModule = (() => {
   }
 
   function activate(params = {}) {
-    if (!activated) { activated = true; }
+    if (!activated) {
+      activated = true;
+      // Banki OGNIVO z wgranych plików XML mogą pojawić się w dowolnym
+      // momencie (ognivo.js zapisuje je do SharedStore) — bez tego licznik
+      // „do zajęcia” / „nowe do zajęcia” pokazywałby stare dane do czasu
+      // przypadkowego odświeżenia czegoś innego.
+      if (typeof SharedStore !== 'undefined' && typeof SharedStore.on === 'function' && SharedStore.KEYS && SharedStore.KEYS.OGNIVO) {
+        SharedStore.on(SharedStore.KEYS.OGNIVO, () => invalidatePendingCache());
+      }
+    }
     tryLoadPersistedBaza();
     const live = document.getElementById('wro-list');
     if (!live) render();
@@ -1995,7 +2137,9 @@ const WroModule = (() => {
     filterFirstSeenOnly, isFirstSeenPerson, getFirstSeenStamp,
     explodeOgnivoRows, findBankAnnotation, setOgnivoBankStatus,
     isOgnivoSource, ognivoCanonFromRow, ognivoLabelFromRow,
-    filterPendingOnly,
+    filterPendingOnly, filterNewPendingOnly,
+    entityHasPendingLive, entityIsNewPending, countNewPending,
+    invalidatePendingCache, showLegend,
   };
 })();
 

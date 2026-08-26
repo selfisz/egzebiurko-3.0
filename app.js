@@ -399,6 +399,58 @@ window.StatusBar      = StatusBar;
 window.showToast      = showToast;
 
 
+/* ─── WSPÓLNA LEGENDA — Analityka WRO + Szafka teczek ──────────
+   Jedno miejsce tłumaczące wszystkie odznaki/filtry "nowość" i "brak ...",
+   dostępne z obu modułów, żeby nie trzeba było pamiętać osobnych znaczeń
+   w każdej zakładce. ──────────────────────────────────────────── */
+function egzLegendGroupHtml(title, items) {
+  const rows = items.map(it => `
+    <div class="egz-legend-item">
+      <div class="egz-legend-badge">${it.badge}</div>
+      <div class="egz-legend-txt"><strong>${it.name}</strong><span>${it.desc}</span></div>
+    </div>`).join('');
+  return `<div class="egz-legend-group"><div class="egz-legend-group-title">${title}</div>${rows}</div>`;
+}
+
+function showEgzLegend() {
+  let dlg = document.getElementById('egz-legend-dlg');
+  if (!dlg) {
+    dlg = document.createElement('div');
+    dlg.id = 'egz-legend-dlg';
+    document.body.appendChild(dlg);
+  }
+  const wro = egzLegendGroupHtml('📊 Analityka WRO (lista po lewej)', [
+    { badge: '🎯 nowe do zajęcia', name: 'Nowe do zajęcia', desc: 'Podmiotu NIE było w poprzednim raporcie/Majątku Szafki I ma coś nieoznaczonego (bank/JPK/AUM bez Zrobione/Wyklucz). To najważniejsza odznaka po wgraniu świeżego raportu.' },
+    { badge: '🆕 nowy wpis', name: 'Bez wcześniejszego wpisu', desc: 'Pojawił się pierwszy raz — ale to wyłącznie informacja "nowy", nie mówi nic o tym, czy jest coś do zrobienia.' },
+    { badge: '🔥 do zajęcia', name: 'Do zajęcia', desc: 'Ma wynik OGNIVO/AUM/JPK bez statusu Zrobione/Wyklucz — niezależnie od tego, czy to nowy, czy stary wpis.' },
+    { badge: '🗂 Brak w Szafce', name: 'Brak w Szafce', desc: 'Nie znaleziono w Arkuszu pasującego PESEL/NIP — sprawa dopasowania kartoteki, nie ma nic wspólnego z "nowością".' },
+    { badge: 'w Szafce', name: 'w Szafce / poza bazą', desc: '„w Szafce” = dopasowano do rekordu w Arkuszu. „poza bazą” = PESEL/NIP nie znaleziony w Arkuszu.' },
+    { badge: 'bez WRO', name: 'Bez raportu WRO', desc: 'W bazie WRO są dla tej osoby tylko wyniki OGNIVO/AUM (bez pełnego raportu WRO).' },
+  ]);
+  const zob = egzLegendGroupHtml('🗄 Szafka teczek (pigułki filtrów)', [
+    { badge: '🎯 Nowe do zajęcia', name: 'Nowe do zajęcia', desc: 'To samo połączenie co w Analityce WRO: pierwsze pojawienie się I coś nieoznaczonego. Zacznij przegląd od tego filtra po każdej nowej bazie.' },
+    { badge: '🔥 Nowość WRO', name: 'Do zajęcia (wszystkie)', desc: 'Wszyscy z nieoznaczonymi wynikami OGNIVO/AUM/JPK — także ci, którzy byli już wcześniej w bazie.' },
+    { badge: '🏦 Nowe banki OGNIVO', name: 'Nowe banki OGNIVO', desc: 'Podzbiór powyższego — tylko banki OGNIVO, bez AUM/JPK.' },
+    { badge: '🆕 Bez wcześniejszego wpisu', name: 'Bez wcześniejszego wpisu', desc: 'Pierwsze pojawienie się w raporcie WRO — samo w sobie nie znaczy, że jest coś do zajęcia.' },
+    { badge: '🗂 Nowe w Arkuszu', name: 'Nowe w Arkuszu', desc: 'Wiersze, które przed chwilą przybyły z Excela/Arkusza — nie ma to związku z raportami WRO.' },
+    { badge: 'Braki / W toku / Komplet', name: 'Stan systemów rejestrowych', desc: 'Ile z systemów (KAWA, SINF, UFG, JPK, INFZ…) ma już wypełnioną datę dla danej osoby.' },
+    { badge: 'Brak KAWA / SINF / UFG / JPK / INFZ', name: 'Braki pojedynczych systemów', desc: 'Pokazuje tylko osoby, u których dany system nie ma jeszcze wpisanej daty.' },
+  ]);
+  dlg.innerHTML = `
+    <div class="egz-legend-overlay" onclick="document.getElementById('egz-legend-dlg').style.display='none'">
+      <div class="egz-legend-box" onclick="event.stopPropagation()">
+        <div class="egz-legend-title">❓ Co znaczą te odznaki i filtry?</div>
+        <div class="egz-legend-sub">Skrót: jeśli szukasz "co nowego i wymaga sprawdzenia" po wgraniu świeżej bazy — patrz zawsze na <strong>🎯 Nowe do zajęcia</strong>. Reszta to dodatkowe, węższe spojrzenia na te same dane.</div>
+        ${wro}
+        ${zob}
+        <button class="egz-legend-close" onclick="document.getElementById('egz-legend-dlg').style.display='none'">Zamknij</button>
+      </div>
+    </div>`;
+  dlg.style.display = 'block';
+}
+window.showEgzLegend = showEgzLegend;
+
+
 /* ─── PANIC BUTTON (cała aplikacja): 2× Esc → nakładka „urzędowa” ── */
 const PanicButton = (() => {
   const REGULATION_HTML = `
