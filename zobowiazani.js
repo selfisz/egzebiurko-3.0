@@ -1106,9 +1106,15 @@ const ZobowiazaniModule = (() => {
     return { pk: pesel || nip, snap: null };
   }
 
-  function isOgSec(secKey) {
-    return /ognivo/i.test(String(secKey || ''))
-      || (typeof WroModule !== 'undefined' && typeof WroModule.isOgnivoSource === 'function' && WroModule.isOgnivoSource(secKey));
+  /** Zwraca 'ognivo' | 'aum' | null — czy sekcja ma wiele wpisów per komórka
+   *  (banki OGNIVO, instytucje AUM), które trzeba rozbić na osobne karty. */
+  function splitKindOf(secKey) {
+    if (typeof WroModule !== 'undefined' && typeof WroModule.detectSplitKind === 'function') {
+      return WroModule.detectSplitKind(secKey);
+    }
+    if (/ognivo/i.test(String(secKey || ''))) return 'ognivo';
+    if (/\baum\b/i.test(String(secKey || ''))) return 'aum';
+    return null;
   }
 
   function expandMajatek(open) {
@@ -1196,32 +1202,33 @@ const ZobowiazaniModule = (() => {
       const icon = iconMeta ? iconMeta.icon : '📄';
       const label = iconMeta ? iconMeta.label : secKey.replace('Wynik: ', '');
       const isAction = secKey.startsWith('Wynik:');
-      const isOg = isOgSec(secKey);
+      const kind = splitKindOf(secKey);
+      const isOg = !!kind;
       const safe = secKey.replace(/[^a-zA-Z0-9]/g, '');
       const sid = 'zob-maj-' + pk + '-' + safe;
       const headers = Array.isArray(sec.headers) ? sec.headers : [];
       const rowsRaw = Array.isArray(sec.rows) ? sec.rows : [];
-      const rows = (isOg && WroModule.explodeOgnivoRows) ? WroModule.explodeOgnivoRows(headers, rowsRaw) : rowsRaw;
+      const rows = (kind && WroModule.explodeSplitRows) ? WroModule.explodeSplitRows(headers, rowsRaw, kind) : rowsRaw;
 
       const todoRows = [];
       const knownRows = [];
       rows.forEach(r => {
         const cells = Array.isArray(r) ? r : Object.keys(r || {}).sort().map(k => r[k]);
-        const canon = isOg && WroModule.ognivoCanonFromRow ? WroModule.ognivoCanonFromRow(headers, cells) : '';
-        const fp = isOg ? ('bank:' + canon) : cells.slice(0, 5).map(v => String(v || '')).join('||');
+        const canon = kind && WroModule.splitCanonFromRow ? WroModule.splitCanonFromRow(headers, cells, kind) : '';
+        const fp = kind ? (kind + ':' + canon) : cells.slice(0, 5).map(v => String(v || '')).join('||');
         const ann = isAction
-          ? (isOg && WroModule.findBankAnnotation
-            ? WroModule.findBankAnnotation(pk, canon)
+          ? (kind && WroModule.findSplitAnnotation
+            ? WroModule.findSplitAnnotation(pk, canon, kind)
             : (WroModule.getAnnotation ? WroModule.getAnnotation(pk, safe, fp) : null))
           : null;
-        const pack = { r: cells, fp, ann, canon, bankLabel: isOg && WroModule.ognivoLabelFromRow ? WroModule.ognivoLabelFromRow(headers, cells) : '' };
+        const pack = { r: cells, fp, ann, canon, bankLabel: kind && WroModule.splitLabelFromRow ? WroModule.splitLabelFromRow(headers, cells, kind) : '' };
         if (isAction && ann && (ann.status === 'done' || ann.status === 'excluded')) knownRows.push(pack);
         else todoRows.push(pack);
       });
 
       const rowCard = (item, known) => {
         const ctxId = 'zwk' + (++_wroItemSeq);
-        _wroItemCtx[ctxId] = { pk, safe, fp: item.fp, bankCanon: item.canon || '' };
+        _wroItemCtx[ctxId] = { pk, safe, fp: item.fp, splitKind: kind || '', splitCanon: item.canon || '' };
         const title = item.bankLabel || wroRowPreview(headers, item.r);
         const fields = wroRowFieldsHtml(headers, item.r);
         const annot = isAction
