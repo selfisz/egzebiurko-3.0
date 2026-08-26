@@ -15,6 +15,7 @@ const ZobowiazaniModule = (() => {
   const FILE_SOURCE_KEY = 'egze3_zob_file_source';
   const DESK_PINS_KEY = 'egze3_desk_pins';
   const ARCHIVE_IDS_KEY = 'egze3_archive_ids';
+  const REMOVED_IDS_KEY = 'egze3_removed_ids';
   const OPEN_TABS_KEY = 'egze3_open_tabs';
 
   let activated = false;
@@ -42,8 +43,13 @@ const ZobowiazaniModule = (() => {
   let folderAnimToken = 0;
   let deskPins = loadJsonKey(DESK_PINS_KEY, []);
   let archiveMap = loadJsonKey(ARCHIVE_IDS_KEY, {});
+  /** @type {Object<string,{at:string,name:string}>} klucze trwale usunięte
+   *  przez „Wyczyść archiwum” — znikają wszędzie, nie da się ich cofnąć z UI.
+   *  Nie rusza to danych w Arkuszu — to tylko lokalny filtr Szafki. */
+  let removedMap = loadJsonKey(REMOVED_IDS_KEY, {});
   if (!Array.isArray(deskPins)) deskPins = [];
   if (!archiveMap || typeof archiveMap !== 'object' || Array.isArray(archiveMap)) archiveMap = {};
+  if (!removedMap || typeof removedMap !== 'object' || Array.isArray(removedMap)) removedMap = {};
   /** @type {Set<string>} PESEL/NIP dodane ostatnim „Dodaj do bazy” */
   let freshKeys = new Set();
   let _filterCache = { key: '', rows: null };
@@ -109,6 +115,11 @@ const ZobowiazaniModule = (() => {
     _countsDirty = true;
   }
 
+  function persistRemoved() {
+    saveJsonKey(REMOVED_IDS_KEY, removedMap);
+    _countsDirty = true;
+  }
+
   function personKeyFromInfo(info) {
     const id = String(info.pesel || info.nip || '').replace(/\D/g, '');
     if (id) return id;
@@ -125,6 +136,10 @@ const ZobowiazaniModule = (() => {
 
   function isArchived(key) {
     return !!(archiveMap && archiveMap[key]);
+  }
+
+  function isRemoved(key) {
+    return !!(removedMap && removedMap[key]);
   }
 
   function rowStan(row) {
@@ -1190,8 +1205,9 @@ const ZobowiazaniModule = (() => {
       const sid = 'zob-maj-' + pk + '-' + secKey.replace(/[^a-zA-Z0-9]/g, '');
       const headers = Array.isArray(snap.sections[secKey].headers) ? snap.sections[secKey].headers : [];
       const raw = snap.sections[secKey].rows || [];
-      const n = (isOgSec(secKey) && WroModule.explodeOgnivoRows)
-        ? WroModule.explodeOgnivoRows(headers, raw).length
+      const capKind = splitKindOf(secKey);
+      const n = (capKind && WroModule.explodeSplitRows)
+        ? WroModule.explodeSplitRows(headers, raw, capKind).length
         : raw.length;
       return `<button type="button" class="zob-maj-cap" onclick="ZobowiazaniModule.openMajatekSection('${sid}')">${icon} ${escapeHtml(label)} <span>${n}</span></button>`;
     }).join('');
@@ -1456,6 +1472,7 @@ const ZobowiazaniModule = (() => {
       sortCol,
       sortDir,
       Object.keys(archiveMap).length,
+      Object.keys(removedMap).length,
       deskPins.length,
       freshKeys.size,
       (typeof WroModule !== 'undefined' && WroModule.getFirstSeenStamp) ? WroModule.getFirstSeenStamp() : '',
@@ -1466,6 +1483,9 @@ const ZobowiazaniModule = (() => {
       const info = extractPersonInfo(row);
       return { row, idx, info, key: personKeyFromInfo(info) };
     });
+
+    // Trwale usunięte (Wyczyść archiwum) — znikają wszędzie, bez wyjątków.
+    rowsWithIndex = rowsWithIndex.filter(item => !isRemoved(item.key));
 
     // Sekcje: Aktywne / Biurko / Archiwum
     rowsWithIndex = rowsWithIndex.filter(item => {
@@ -1588,6 +1608,7 @@ const ZobowiazaniModule = (() => {
     let active = 0, desk = 0, archive = 0, suspended = 0;
     dbSheet.rows.forEach(r => {
       const key = personKeyFromRow(r);
+      if (isRemoved(key)) return;
       if (isArchived(key)) archive++;
       else if (isSuspendedRow(r)) suspended++;
       else {
@@ -1610,6 +1631,7 @@ const ZobowiazaniModule = (() => {
     let scoped = 0;
     dbSheet.rows.forEach(r => {
       const key = personKeyFromRow(r);
+      if (isRemoved(key)) return;
       const archived = isArchived(key);
       if (sectionFilter === 'archive' && !archived) return;
       if (sectionFilter === 'desk' && (!(isPinned(key) && !archived))) return;
@@ -1832,8 +1854,8 @@ const ZobowiazaniModule = (() => {
 
           <div class="zob-split-container mode-${viewMode}" id="zob-split">
             <aside class="zob-drawer" id="zob-drawer">
-              <div class="zob-drawer-head">
-                <span class="zob-drawer-head-title">${sectionFilter === 'desk' ? 'Biurko' : sectionFilter === 'archive' ? 'Archiwum' : sectionFilter === 'suspended' ? 'Zawieszone' : 'Lista zobowiązanych'}</span>
+              <div class="zob-drawer-head" id="zob-drawer-head">
+                <span class="zob-drawer-head-title" id="zob-drawer-head-title">${sectionFilter === 'desk' ? 'Biurko' : sectionFilter === 'archive' ? 'Archiwum' : sectionFilter === 'suspended' ? 'Zawieszone' : 'Lista zobowiązanych'}</span>
                 <span class="zob-drawer-count" id="zob-drawer-count">0</span>
               </div>
               <div class="zob-folder-scroll" id="zob-folder-list"></div>
@@ -1945,6 +1967,39 @@ const ZobowiazaniModule = (() => {
     if (opts.pills !== false) {
       updatePillsBar();
       updateSectionsBar();
+    }
+    updateDrawerHead();
+  }
+
+  /** Sekcje (Aktywne/Biurko/Zawieszone/Archiwum) są przełączane bez pełnego
+   *  re-renderu (`renderViews`, nie `render`), więc nagłówek szuflady (tytuł +
+   *  przycisk „Wyczyść archiwum”) trzeba zaktualizować osobno — inaczej
+   *  przycisk, który zależy od `sectionFilter`, nigdy by się nie pojawił
+   *  (statyczny HTML jest generowany raz, przy pierwszym `render()`). */
+  function updateDrawerHead() {
+    const titleEl = document.getElementById('zob-drawer-head-title');
+    if (titleEl) {
+      titleEl.textContent = sectionFilter === 'desk' ? 'Biurko'
+        : sectionFilter === 'archive' ? 'Archiwum'
+        : sectionFilter === 'suspended' ? 'Zawieszone'
+        : 'Lista zobowiązanych';
+    }
+    const head = document.getElementById('zob-drawer-head');
+    if (!head) return;
+    let clearBtn = document.getElementById('zob-clear-archive-btn');
+    const showClear = sectionFilter === 'archive' && Object.keys(archiveMap).length > 0;
+    if (showClear && !clearBtn) {
+      clearBtn = document.createElement('button');
+      clearBtn.type = 'button';
+      clearBtn.id = 'zob-clear-archive-btn';
+      clearBtn.className = 'zob-action-btn';
+      clearBtn.style.cssText = 'height:26px;padding:0 10px;font-size:.72rem;color:#991b1b';
+      clearBtn.title = 'Trwale usuwa wszystkie teczki z Archiwum. Nie rusza danych w Arkuszu.';
+      clearBtn.setAttribute('onclick', 'ZobowiazaniModule.clearArchive()');
+      clearBtn.textContent = '🗑 Wyczyść archiwum';
+      head.appendChild(clearBtn);
+    } else if (!showClear && clearBtn) {
+      clearBtn.remove();
     }
   }
 
@@ -2876,6 +2931,31 @@ const ZobowiazaniModule = (() => {
     renderViews();
   }
 
+  /** Trwale usuwa (ukrywa na zawsze) wszystkie teczki aktualnie w Archiwum.
+   *  Nie rusza wierszy w dbSheet/Arkuszu — tylko dopisuje klucze do
+   *  `removedMap`, więc znikają ze wszystkich sekcji/filtrów/liczników
+   *  bez przesuwania indeksów wierszy (co mogłoby podmienić otwarte karty). */
+  function clearArchive() {
+    const keys = Object.keys(archiveMap);
+    if (!keys.length) return;
+    if (!confirm(`Na pewno trwale usunąć ${keys.length} teczek(i) z Archiwum? Tej operacji nie można cofnąć (dane w Arkuszu pozostają bez zmian).`)) return;
+    const now = new Date().toISOString();
+    keys.forEach(key => {
+      removedMap[key] = { at: now, name: (archiveMap[key] && archiveMap[key].name) || '' };
+      delete archiveMap[key];
+      closeTab(key);
+      const i = deskPins.indexOf(key);
+      if (i >= 0) deskPins.splice(i, 1);
+      freshKeys.delete(key);
+    });
+    persistRemoved();
+    persistArchive();
+    persistDeskPins();
+    invalidateListCache();
+    renderViews();
+    if (typeof showToast === 'function') showToast(`🗑 Wyczyszczono Archiwum (${keys.length})`, 'info', 2500);
+  }
+
   function isSuspended(key) {
     const pk = String(key || '').replace(/\D/g, '') || String(key || '');
     if (!pk || !dbSheet) return false;
@@ -2908,8 +2988,8 @@ const ZobowiazaniModule = (() => {
     if (!ctx) return;
     if (typeof WroModule === 'undefined') return;
     const data = status ? { status } : null;
-    if (ctx.bankCanon && typeof WroModule.setOgnivoBankStatus === 'function') {
-      WroModule.setOgnivoBankStatus(ctx.pk, ctx.bankCanon, data);
+    if (ctx.splitKind && ctx.splitCanon && typeof WroModule.setSplitStatus === 'function') {
+      WroModule.setSplitStatus(ctx.pk, ctx.splitCanon, data, ctx.splitKind);
     } else if (WroModule.setAnnotationData) {
       WroModule.setAnnotationData(ctx.pk, ctx.safe, ctx.fp, data);
     } else return;
@@ -3180,6 +3260,7 @@ const ZobowiazaniModule = (() => {
   function lookupById(id) {
     const want = String(id || '').replace(/\D/g, '');
     if (!want || want.length < 10) return null;
+    if (isRemoved(want)) return null;
     return getIdIndex()[want] || null;
   }
 
@@ -3197,6 +3278,10 @@ const ZobowiazaniModule = (() => {
     const savedArchive = loadJsonKey(ARCHIVE_IDS_KEY, {});
     if (savedArchive && typeof savedArchive === 'object' && !Array.isArray(savedArchive)) {
       archiveMap = savedArchive;
+    }
+    const savedRemoved = loadJsonKey(REMOVED_IDS_KEY, {});
+    if (savedRemoved && typeof savedRemoved === 'object' && !Array.isArray(savedRemoved)) {
+      removedMap = savedRemoved;
     }
     const container = document.getElementById('zobowiazani-app');
     const alreadyLive = activated && dbSheet && container && container.querySelector('.zob-header');
@@ -3242,6 +3327,7 @@ const ZobowiazaniModule = (() => {
     togglePin,
     toggleSuspend,
     archivePerson,
+    clearArchive,
     applyArchiveIds,
     afterExcelRefresh,
     isSuspended,
