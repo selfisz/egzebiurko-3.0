@@ -76,15 +76,50 @@ const WroModule = (() => {
     });
     return max;
   }
+  /* ─── WIELO-WPISOWE ŹRÓDŁA (OGNIVO / AUM) ─────────────────
+     Zarówno OGNIVO ("1240 Pekao | 1140 mBank"), jak i AUM
+     ("12400001 Bank Polska Kasa Opieki S.A.; 10200003 PKO BP S.A.")
+     to jedna komórka z kilkoma podmiotami rozdzielonymi „|” albo „;”.
+     Poniższe funkcje są sparametryzowane przez `kind` ('ognivo' | 'aum'),
+     żeby rozbijać obie na osobne, adresowalne karty bez duplikowania
+     logiki. Stare nazwy (bankCodeCanon, explodeOgnivoRows, …) zostają
+     jako cienkie „wrappery” z kind='ognivo', żeby nie ruszać wszystkich
+     miejsc, które ich już używają. ─── */
+  function detectSplitKind(src) {
+    const s = String(src || '');
+    if (/ognivo/i.test(s)) return 'ognivo';
+    if (/\baum\b/i.test(s)) return 'aum';
+    return null;
+  }
   function isOgnivoSource(src) {
-    return /ognivo/i.test(String(src || ''));
+    return detectSplitKind(src) === 'ognivo';
+  }
+  function isAumSource(src) {
+    return detectSplitKind(src) === 'aum';
+  }
+  function isSplitSource(src) {
+    return !!detectSplitKind(src);
   }
 
-  function bankCodeCanon(text) {
-    const d = String(text || '').replace(/\D/g, '');
-    if (d.length >= 4) return d.slice(0, 4);
+  const SPLIT_ANNOT_SECTION = { ognivo: 'WynikOGNIVO', aum: 'WynikAUM' };
+  const SPLIT_LEGACY_SECTION = { ognivo: 'OGNIVOStore', aum: 'AUMStore' };
+  const SPLIT_IID_PREFIX = { ognivo: 'bank:', aum: 'aum:' };
+  const SPLIT_DEFAULT_LABEL = { ognivo: 'Bank', aum: 'Instytucja' };
+
+  function splitCodeCanon(text, kind) {
+    const s = String(text || '').trim();
+    // Bierzemy wiodący ciąg cyfr (kod na początku komórki) — nie same
+    // /\D/g, żeby przypadkowa cyfra w nazwie instytucji (np. „Fundusz 2”)
+    // nie zniekształciła kodu.
+    const lead = s.match(/^\d+/);
+    const d = lead ? lead[0] : s.replace(/\D/g, '');
+    if (kind === 'ognivo') return d.length >= 4 ? d.slice(0, 4) : d;
+    // AUM: kody instytucji bywają dłuższe (np. 8 cyfr) — bierzemy cały
+    // wiodący ciąg cyfr, żeby nie mylić różnych podmiotów o wspólnym prefiksie.
     return d;
   }
+  function bankCodeCanon(text) { return splitCodeCanon(text, 'ognivo'); }
+  function aumCodeCanon(text) { return splitCodeCanon(text, 'aum'); }
 
   function splitBankParts(text) {
     const s = String(text || '').trim();
@@ -95,19 +130,23 @@ const WroModule = (() => {
     return [s];
   }
 
-  function ognivoBankColIndex(headers) {
+  function splitEntryColIndex(headers, kind) {
     const hLower = (headers || []).map(h => String(h || '').toLowerCase());
-    const idx = hLower.findIndex(h => /bank|kod\s*bank|instytucj/i.test(h));
+    const pattern = kind === 'aum'
+      ? /instytucj|towarzystw|fundusz|aum|nazwa|podmiot/i
+      : /bank|kod\s*bank|instytucj/i;
+    const idx = hLower.findIndex(h => pattern.test(h));
     return idx >= 0 ? idx : 0;
   }
+  function ognivoBankColIndex(headers) { return splitEntryColIndex(headers, 'ognivo'); }
 
-  function explodeOgnivoRows(headers, bodyRows) {
-    const bankIdx = ognivoBankColIndex(headers);
+  function explodeSplitRows(headers, bodyRows, kind) {
+    const colIdx = splitEntryColIndex(headers, kind);
     const out = [];
     const seen = new Set();
     (bodyRows || []).forEach(row => {
       const cells = Array.isArray(row) ? row.slice() : [row];
-      let col = bankIdx;
+      let col = colIdx;
       let blob = cells[col];
       if (!/[|;]/.test(String(blob || ''))) {
         const alt = cells.findIndex(c => /[|;]/.test(String(c || '')) && /\d{3,8}/.test(String(c || '')));
@@ -119,9 +158,9 @@ const WroModule = (() => {
         const copy = cells.slice();
         if (part) {
           copy[col] = part;
-          copy[bankIdx] = part;
+          copy[colIdx] = part;
         }
-        const canon = bankCodeCanon(part || copy.join(' '));
+        const canon = splitCodeCanon(part || copy.join(' '), kind);
         const dedupe = canon || String(part || copy.join('|')).toLowerCase();
         if (dedupe && seen.has(dedupe)) return;
         if (dedupe) seen.add(dedupe);
@@ -130,21 +169,35 @@ const WroModule = (() => {
     });
     return out;
   }
+  function explodeOgnivoRows(headers, bodyRows) { return explodeSplitRows(headers, bodyRows, 'ognivo'); }
+  function explodeAumRows(headers, bodyRows) { return explodeSplitRows(headers, bodyRows, 'aum'); }
 
-  function ognivoLabelFromRow(headers, row) {
-    const idx = ognivoBankColIndex(headers);
+  function splitLabelFromRow(headers, row, kind) {
+    const idx = splitEntryColIndex(headers, kind);
     const raw = String((row && row[idx]) != null ? row[idx] : (row || []).filter(Boolean).join(' ')).trim();
-    return raw || 'Bank';
+    return raw || SPLIT_DEFAULT_LABEL[kind] || 'Wpis';
+  }
+  function ognivoLabelFromRow(headers, row) { return splitLabelFromRow(headers, row, 'ognivo'); }
+  function aumLabelFromRow(headers, row) { return splitLabelFromRow(headers, row, 'aum'); }
+
+  function splitCanonFromRow(headers, row, kind) {
+    return splitCodeCanon(splitLabelFromRow(headers, row, kind), kind);
+  }
+  function ognivoCanonFromRow(headers, row) { return splitCanonFromRow(headers, row, 'ognivo'); }
+  function aumCanonFromRow(headers, row) { return splitCanonFromRow(headers, row, 'aum'); }
+
+  function splitKindFromSec(sec) {
+    const s = String(sec || '');
+    if (s === SPLIT_ANNOT_SECTION.ognivo || s === SPLIT_LEGACY_SECTION.ognivo || /ognivo/i.test(s)) return 'ognivo';
+    if (s === SPLIT_ANNOT_SECTION.aum || s === SPLIT_LEGACY_SECTION.aum || /^wynikaum$/i.test(s)) return 'aum';
+    return null;
   }
 
-  function ognivoCanonFromRow(headers, row) {
-    return bankCodeCanon(ognivoLabelFromRow(headers, row));
-  }
-
-  function findBankAnnotation(pk, canon) {
-    if (!pk || !canon) return null;
+  function findSplitAnnotation(pk, canon, kind) {
+    if (!pk || !canon || !kind) return null;
     const all = loadAnnotations();
     const prefix = pk + '|';
+    const iidPrefix = SPLIT_IID_PREFIX[kind];
     let found = null;
     Object.keys(all).forEach(k => {
       if (!k.startsWith(prefix)) return;
@@ -153,8 +206,8 @@ const WroModule = (() => {
       if (i2 < 0) return;
       const sec = rest.slice(0, i2);
       const iid = rest.slice(i2 + 1);
-      if (sec !== 'OGNIVOStore' && !/ognivo/i.test(sec)) return;
-      const c = bankCodeCanon(String(iid).replace(/^bank:/i, ''));
+      if (splitKindFromSec(sec) !== kind) return;
+      const c = splitCodeCanon(String(iid).replace(new RegExp('^' + iidPrefix, 'i'), ''), kind);
       if (c && c === canon) {
         const ann = all[k];
         if (!found || (ann && (ann.status === 'done' || ann.status === 'excluded'))) found = ann;
@@ -165,11 +218,14 @@ const WroModule = (() => {
     });
     return found;
   }
+  function findBankAnnotation(pk, canon) { return findSplitAnnotation(pk, canon, 'ognivo'); }
+  function findAumAnnotation(pk, canon) { return findSplitAnnotation(pk, canon, 'aum'); }
 
-  function setOgnivoBankStatus(pk, canon, data) {
-    if (!pk || !canon) return;
-    const iid = 'bank:' + canon;
-    setAnnotationData(pk, 'WynikOGNIVO', iid, data);
+  function setSplitStatus(pk, canon, data, kind) {
+    if (!pk || !canon || !kind) return;
+    const iid = SPLIT_IID_PREFIX[kind] + canon;
+    setAnnotationData(pk, SPLIT_ANNOT_SECTION[kind], iid, data);
+    if (kind !== 'ognivo') return;
     try {
       const ognivoData = SharedStore.get(SharedStore.KEYS.OGNIVO, {});
       Object.keys(ognivoData || {}).forEach(k => {
@@ -183,6 +239,8 @@ const WroModule = (() => {
       });
     } catch {}
   }
+  function setOgnivoBankStatus(pk, canon, data) { setSplitStatus(pk, canon, data, 'ognivo'); }
+  function setAumStatus(pk, canon, data) { setSplitStatus(pk, canon, data, 'aum'); }
 
   function mergeXmlOgnivoBanks(sections, entityId, personKey) {
     try {
@@ -218,10 +276,11 @@ const WroModule = (() => {
       if (!Array.isArray(rows) || rows.length <= 1) return;
       const headers = rows[0];
       const body = rows.slice(1);
+      const kind = detectSplitKind(k);
       out[k] = {
         updatedAt: todayIsoWro(),
         headers,
-        rows: isOgnivoSource(k) ? explodeOgnivoRows(headers, body) : body
+        rows: kind ? explodeSplitRows(headers, body, kind) : body
       };
     });
     mergeXmlOgnivoBanks(out, id, personKeyForEntity(id));
@@ -232,16 +291,16 @@ const WroModule = (() => {
     const pk = digitsId(personKey);
     for (const src of Object.keys(sections)) {
       if (!src.startsWith('Wynik:')) continue;
-      const isOg = isOgnivoSource(src);
-      if (onlyOgnivo && !isOg) continue;
+      const kind = detectSplitKind(src);
+      if (onlyOgnivo && kind !== 'ognivo') continue;
       const safe = src.replace(/[^a-zA-Z0-9]/g, '');
       const sec = sections[src] || {};
       const headers = sec.headers || [];
-      const rows = isOg ? explodeOgnivoRows(headers, sec.rows || []) : (sec.rows || []);
+      const rows = kind ? explodeSplitRows(headers, sec.rows || [], kind) : (sec.rows || []);
       for (const row of rows) {
-        if (isOg) {
-          const canon = ognivoCanonFromRow(headers, row);
-          const ann = findBankAnnotation(pk, canon);
+        if (kind) {
+          const canon = splitCanonFromRow(headers, row, kind);
+          const ann = findSplitAnnotation(pk, canon, kind);
           if (!ann || (ann.status !== 'done' && ann.status !== 'excluded')) return true;
         } else {
           const fp = (row || []).slice(0, 5).map(v => String(v || '')).join('||');
@@ -1031,17 +1090,18 @@ const WroModule = (() => {
       actionSrcs.forEach(src => {
         const rows = data[src];
         const safe = src.replace(/[^a-zA-Z0-9]/g, '');
-        const isOg = isOgnivoSource(src);
+        const kind = detectSplitKind(src);
         const headers = rows[0];
-        // Banki OGNIVO są oznaczane per-bank (klucz "bank:<kod>"), nie per cały
-        // wiersz — jeśli policzylibyśmy je jak zwykłą sekcję (fingerprint
-        // całego wiersza), już oznaczone banki zawsze wychodziłyby jako "do
-        // zajęcia" (fp się nie zgadza z tym, co realnie zapisano).
-        const bodyRows = isOg ? explodeOgnivoRows(headers, rows.slice(1)) : rows.slice(1);
+        // Banki OGNIVO / instytucje AUM są oznaczane per-wpis (klucz
+        // "bank:<kod>" / "aum:<kod>"), nie per cały wiersz — jeśli
+        // policzylibyśmy je jak zwykłą sekcję (fingerprint całego wiersza),
+        // już oznaczone wpisy zawsze wychodziłyby jako "do zajęcia" (fp się
+        // nie zgadza z tym, co realnie zapisano).
+        const bodyRows = kind ? explodeSplitRows(headers, rows.slice(1), kind) : rows.slice(1);
         bodyRows.forEach(row => {
           let ann;
-          if (isOg) {
-            ann = findBankAnnotation(pk, ognivoCanonFromRow(headers, row));
+          if (kind) {
+            ann = findSplitAnnotation(pk, splitCanonFromRow(headers, row, kind), kind);
           } else {
             const fp = row.slice(0, 5).map(v => String(v || '')).join('||');
             ann = annots[buildAnnotKey(pk, safe, fp)];
@@ -1511,22 +1571,22 @@ const WroModule = (() => {
       const isAction = src.startsWith('Wynik:');
       const disp = src.replace('Wynik: ','Akcja: ');
       const headers = rows[0];
-      const bodyRows = isOgnivoSource(src) ? explodeOgnivoRows(headers, rows.slice(1)) : rows.slice(1);
+      const splitKind = detectSplitKind(src);
+      const bodyRows = splitKind ? explodeSplitRows(headers, rows.slice(1), splitKind) : rows.slice(1);
 
       const todoCards = [];
       const knownCards = [];
 
       bodyRows.forEach((row, i) => {
-        const isOg = isOgnivoSource(src);
-        const canon = isOg ? ognivoCanonFromRow(headers, row) : '';
-        const rowFp = isOg ? ('bank:' + (canon || String(i))) : row.slice(0, 5).map(v => String(v || '')).join('||');
+        const canon = splitKind ? splitCanonFromRow(headers, row, splitKind) : '';
+        const rowFp = splitKind ? (SPLIT_IID_PREFIX[splitKind] + (canon || String(i))) : row.slice(0, 5).map(v => String(v || '')).join('||');
         const ann = isAction
-          ? (isOg ? findBankAnnotation(personKey, canon) : getAnnotation(personKey, safe, rowFp))
+          ? (splitKind ? findSplitAnnotation(personKey, canon, splitKind) : getAnnotation(personKey, safe, rowFp))
           : null;
         const cardCls = ann?.status === 'excluded' ? 'wro-card-excl' : ann?.status === 'done' ? 'wro-card-done' : '';
-        const title = isOg ? ognivoLabelFromRow(headers, row) : ('Wpis #' + (i + 1));
-        const annotIid = isOg ? ('bank:' + canon) : rowFp;
-        const annotSec = isOg ? 'WynikOGNIVO' : safe;
+        const title = splitKind ? splitLabelFromRow(headers, row, splitKind) : ('Wpis #' + (i + 1));
+        const annotIid = splitKind ? (SPLIT_IID_PREFIX[splitKind] + canon) : rowFp;
+        const annotSec = splitKind ? SPLIT_ANNOT_SECTION[splitKind] : safe;
         const cardHtml = `
           <div class="wro-card ${cardCls}">
             <div class="wro-card-hdr">
@@ -1739,8 +1799,9 @@ const WroModule = (() => {
       document.body.appendChild(pop);
     }
 
-    const current = (/ognivo/i.test(ctx.sec) || ctx.sec === 'OGNIVOStore')
-      ? (findBankAnnotation(ctx.pk, bankCodeCanon(String(ctx.iid).replace(/^bank:/i, ''))) || getAnnotation(ctx.pk, ctx.sec, ctx.iid))
+    const popKind = splitKindFromSec(ctx.sec);
+    const current = popKind
+      ? (findSplitAnnotation(ctx.pk, splitCodeCanon(String(ctx.iid).replace(/^(bank|aum):/i, ''), popKind), popKind) || getAnnotation(ctx.pk, ctx.sec, ctx.iid))
       : getAnnotation(ctx.pk, ctx.sec, ctx.iid);
     const isTodo = !current || !current.status || current.status === 'todo';
     const isDone = current?.status === 'done';
@@ -1806,9 +1867,10 @@ const WroModule = (() => {
       data = { status: 'excluded', reason };
     }
 
-    if ((/ognivo/i.test(ctx.sec) || ctx.sec === 'OGNIVOStore')) {
-      const canon = bankCodeCanon(String(ctx.iid).replace(/^bank:/i, ''));
-      if (canon) setOgnivoBankStatus(ctx.pk, canon, data);
+    const statusKind = splitKindFromSec(ctx.sec);
+    if (statusKind) {
+      const canon = splitCodeCanon(String(ctx.iid).replace(/^(bank|aum):/i, ''), statusKind);
+      if (canon) setSplitStatus(ctx.pk, canon, data, statusKind);
       else setAnnotationData(ctx.pk, ctx.sec, ctx.iid, data);
     } else {
       setAnnotationData(ctx.pk, ctx.sec, ctx.iid, data);
@@ -2141,6 +2203,10 @@ const WroModule = (() => {
     filterFirstSeenOnly, isFirstSeenPerson, getFirstSeenStamp,
     explodeOgnivoRows, findBankAnnotation, setOgnivoBankStatus,
     isOgnivoSource, ognivoCanonFromRow, ognivoLabelFromRow,
+    explodeAumRows, findAumAnnotation, setAumStatus,
+    isAumSource, aumCanonFromRow, aumLabelFromRow,
+    detectSplitKind, isSplitSource, explodeSplitRows,
+    splitCanonFromRow, splitLabelFromRow, findSplitAnnotation, setSplitStatus,
     filterPendingOnly, filterNewPendingOnly,
     entityHasPendingLive, entityIsNewPending, countNewPending,
     invalidatePendingCache, showLegend,
