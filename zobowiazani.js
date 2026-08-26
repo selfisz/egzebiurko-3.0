@@ -620,8 +620,8 @@ const ZobowiazaniModule = (() => {
   }
 
   function formatDatePl(d) {
-    return String(d.getDate()).padStart(2, '0') + '.' +
-      String(d.getMonth() + 1).padStart(2, '0') + '.' + d.getFullYear();
+    return String(d.getDate()).padStart(2, '0') + '-' +
+      String(d.getMonth() + 1).padStart(2, '0') + '-' + d.getFullYear();
   }
 
   function parseDatePl(s) {
@@ -755,7 +755,7 @@ const ZobowiazaniModule = (() => {
 
   function getTodayStr() {
     const d = new Date();
-    return String(d.getDate()).padStart(2, '0') + '.' + String(d.getMonth() + 1).padStart(2, '0') + '.' + d.getFullYear();
+    return String(d.getDate()).padStart(2, '0') + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + d.getFullYear();
   }
 
   function recalcRowStatus(ri, skipEnsure) {
