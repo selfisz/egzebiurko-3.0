@@ -15,6 +15,7 @@ const ZobowiazaniModule = (() => {
   const FILE_SOURCE_KEY = 'egze3_zob_file_source';
   const DESK_PINS_KEY = 'egze3_desk_pins';
   const ARCHIVE_IDS_KEY = 'egze3_archive_ids';
+  const REMOVED_IDS_KEY = 'egze3_removed_ids';
   const OPEN_TABS_KEY = 'egze3_open_tabs';
 
   let activated = false;
@@ -42,8 +43,13 @@ const ZobowiazaniModule = (() => {
   let folderAnimToken = 0;
   let deskPins = loadJsonKey(DESK_PINS_KEY, []);
   let archiveMap = loadJsonKey(ARCHIVE_IDS_KEY, {});
+  /** @type {Object<string,{at:string,name:string}>} klucze trwale usunięte
+   *  przez „Wyczyść archiwum” — znikają wszędzie, nie da się ich cofnąć z UI.
+   *  Nie rusza to danych w Arkuszu — to tylko lokalny filtr Szafki. */
+  let removedMap = loadJsonKey(REMOVED_IDS_KEY, {});
   if (!Array.isArray(deskPins)) deskPins = [];
   if (!archiveMap || typeof archiveMap !== 'object' || Array.isArray(archiveMap)) archiveMap = {};
+  if (!removedMap || typeof removedMap !== 'object' || Array.isArray(removedMap)) removedMap = {};
   /** @type {Set<string>} PESEL/NIP dodane ostatnim „Dodaj do bazy” */
   let freshKeys = new Set();
   let _filterCache = { key: '', rows: null };
@@ -53,12 +59,15 @@ const ZobowiazaniModule = (() => {
   let _wroFlagCache = new Map();
   let _wroItemCtx = {};
   let _wroItemSeq = 0;
+  let _countsCache = null;
+  let _countsDirty = true;
   restoreOpenTabs();
 
   function invalidateListCache() {
     _filterCache = { key: '', rows: null };
     _personColCache = { sheet: null, len: -1, map: null };
     _wroFlagCache = new Map();
+    _countsDirty = true;
   }
 
   function loadJsonKey(key, fallback) {
@@ -98,10 +107,17 @@ const ZobowiazaniModule = (() => {
 
   function persistDeskPins() {
     saveJsonKey(DESK_PINS_KEY, deskPins);
+    _countsDirty = true;
   }
 
   function persistArchive() {
     saveJsonKey(ARCHIVE_IDS_KEY, archiveMap);
+    _countsDirty = true;
+  }
+
+  function persistRemoved() {
+    saveJsonKey(REMOVED_IDS_KEY, removedMap);
+    _countsDirty = true;
   }
 
   function personKeyFromInfo(info) {
@@ -120,6 +136,10 @@ const ZobowiazaniModule = (() => {
 
   function isArchived(key) {
     return !!(archiveMap && archiveMap[key]);
+  }
+
+  function isRemoved(key) {
+    return !!(removedMap && removedMap[key]);
   }
 
   function rowStan(row) {
@@ -306,6 +326,7 @@ const ZobowiazaniModule = (() => {
     if (!Array.isArray(dbSheet.columns)) dbSheet.columns = [];
     ensureSystemColumns(dbSheet);
     invalidateListCache();
+    markSuspendDirty();
     return true;
   }
 
@@ -318,6 +339,43 @@ const ZobowiazaniModule = (() => {
       console.warn('[ZobowiazaniModule] localStorage save failed:', e);
     }
   }
+
+  // ── Zapis do localStorage/Arkusza: odroczony i zbiorczy ──
+  // Zmiany w pamięci (dbData/dbSheet) dzieją się natychmiast (UI reaguje od razu);
+  // fizyczny zapis (JSON.stringify + localStorage + postMessage do Arkusza) jest
+  // zbierany i wykonywany raz po krótkiej chwili ciszy, żeby kilka szybkich
+  // kliknięć nie serializowało całej bazy za każdym razem.
+  const SAVE_DEBOUNCE_MS = 400;
+  let _saveTimer = null;
+  let _suspendDirty = true; // true na starcie: pierwszy zapis zawsze aktualizuje store zawieszonych
+
+  function markSuspendDirty() { _suspendDirty = true; }
+
+  function flushSaveNow() {
+    if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null; }
+    if (!dbData || !dbSheet) return;
+    try {
+      dbData.savedAt = new Date().toISOString();
+      _lastSyncedAt = dbData.savedAt;
+      // Blokuj echo sync na czas zapisu (wcześniej: SET_DB → reload → pusta baza / miganie)
+      _suppressSyncUntil = Date.now() + 2500;
+      if (_suspendDirty) {
+        persistZawieszoneStore();
+        _suspendDirty = false;
+      }
+      const json = JSON.stringify(dbData);
+      localStorage.setItem(AUTOSAVE_KEY, json);
+      const frame = document.getElementById('arkusz-frame');
+      if (frame && frame.contentWindow) {
+        frame.contentWindow.postMessage({ type: 'SET_DB', payload: json }, '*');
+      }
+    } catch (e) {
+      console.error('[ZobowiazaniModule] Błąd zapisu:', e);
+      if (typeof showToast === 'function') showToast('Błąd zapisu bazy!', 'error');
+    }
+  }
+
+  window.addEventListener('beforeunload', flushSaveNow);
 
   /* ─── SYNCHRONIZACJA Z ARKUSZEM / PLIKIEM ──────────────── */
   let _syncTimer = null;
@@ -577,8 +635,8 @@ const ZobowiazaniModule = (() => {
   }
 
   function formatDatePl(d) {
-    return String(d.getDate()).padStart(2, '0') + '.' +
-      String(d.getMonth() + 1).padStart(2, '0') + '.' + d.getFullYear();
+    return String(d.getDate()).padStart(2, '0') + '-' +
+      String(d.getMonth() + 1).padStart(2, '0') + '-' + d.getFullYear();
   }
 
   function parseDatePl(s) {
@@ -706,26 +764,13 @@ const ZobowiazaniModule = (() => {
   function saveData() {
     if (!dbData || !dbSheet) return;
     invalidateListCache();
-    try {
-      dbData.savedAt = new Date().toISOString();
-      _lastSyncedAt = dbData.savedAt;
-      // Blokuj echo sync na czas zapisu (wcześniej: SET_DB → reload → pusta baza / miganie)
-      _suppressSyncUntil = Date.now() + 2500;
-      persistZawieszoneStore();
-      persistLocal();
-      const frame = document.getElementById('arkusz-frame');
-      if (frame && frame.contentWindow) {
-        frame.contentWindow.postMessage({ type: 'SET_DB', payload: JSON.stringify(dbData) }, '*');
-      }
-    } catch (e) {
-      console.error('[ZobowiazaniModule] Błąd zapisu:', e);
-      if (typeof showToast === 'function') showToast('Błąd zapisu bazy!', 'error');
-    }
+    if (_saveTimer) clearTimeout(_saveTimer);
+    _saveTimer = setTimeout(flushSaveNow, SAVE_DEBOUNCE_MS);
   }
 
   function getTodayStr() {
     const d = new Date();
-    return String(d.getDate()).padStart(2, '0') + '.' + String(d.getMonth() + 1).padStart(2, '0') + '.' + d.getFullYear();
+    return String(d.getDate()).padStart(2, '0') + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + d.getFullYear();
   }
 
   function recalcRowStatus(ri, skipEnsure) {
@@ -831,6 +876,36 @@ const ZobowiazaniModule = (() => {
         setTimeout(() => { el.style.outline = orig; }, 500);
       }
     });
+  }
+
+  function markKawaDoneToday(rowIndex) {
+    if (!dbSheet || !dbSheet.rows[rowIndex]) return false;
+    ensureSystemColumns(dbSheet);
+    const idx = dbSheet.columns.indexOf('KAWA');
+    if (idx < 0) return false;
+    const r = dbSheet.rows[rowIndex];
+    while (r.length < dbSheet.columns.length) r.push('');
+    const cur = String(r[idx] || '').trim();
+    if (cur.toLowerCase() === 'pomiń') return false;
+    const today = getTodayStr();
+    if (cur === today) return false;
+    r[idx] = today;
+    recalcRowStatus(rowIndex);
+    saveData();
+    invalidateListCache();
+    if (typeof showToast === 'function') {
+      showToast('KAWA: oznaczono jako zrobione (' + today + ')', 'success', 1800);
+    }
+    return true;
+  }
+
+  function copyIdAndMarkKawa(text, el, rowIndex) {
+    copyToClipboard(text, el);
+    if (markKawaDoneToday(rowIndex)) {
+      renderTableOnly({ keepScroll: true });
+      renderDetailOnly();
+      updatePillsBar();
+    }
   }
 
   /* ─── INTELIGENTNA EKSTRAKCJA DANYCH OSOBOWYCH ──────────── */
@@ -1046,9 +1121,15 @@ const ZobowiazaniModule = (() => {
     return { pk: pesel || nip, snap: null };
   }
 
-  function isOgSec(secKey) {
-    return /ognivo/i.test(String(secKey || ''))
-      || (typeof WroModule !== 'undefined' && typeof WroModule.isOgnivoSource === 'function' && WroModule.isOgnivoSource(secKey));
+  /** Zwraca 'ognivo' | 'aum' | null — czy sekcja ma wiele wpisów per komórka
+   *  (banki OGNIVO, instytucje AUM), które trzeba rozbić na osobne karty. */
+  function splitKindOf(secKey) {
+    if (typeof WroModule !== 'undefined' && typeof WroModule.detectSplitKind === 'function') {
+      return WroModule.detectSplitKind(secKey);
+    }
+    if (/ognivo/i.test(String(secKey || ''))) return 'ognivo';
+    if (/\baum\b/i.test(String(secKey || ''))) return 'aum';
+    return null;
   }
 
   function expandMajatek(open) {
@@ -1072,7 +1153,16 @@ const ZobowiazaniModule = (() => {
     }
   }
 
-  function renderMajatekHtml(info, row) {
+  function captureMajOpenState() {
+    const openSet = new Set();
+    document.querySelectorAll('#zob-detail-content .zob-maj-sec.open').forEach(el => {
+      if (el.id) openSet.add(el.id);
+    });
+    return openSet;
+  }
+
+  function renderMajatekHtml(info, row, prevOpenMaj) {
+    const openMaj = prevOpenMaj || new Set();
     const hasWro = typeof WroModule !== 'undefined';
     const suspended = row ? isSuspendedRow(row) : false;
     const found = hasWro ? majatekSnapshotForInfo(info) : { pk: '', snap: null };
@@ -1115,8 +1205,9 @@ const ZobowiazaniModule = (() => {
       const sid = 'zob-maj-' + pk + '-' + secKey.replace(/[^a-zA-Z0-9]/g, '');
       const headers = Array.isArray(snap.sections[secKey].headers) ? snap.sections[secKey].headers : [];
       const raw = snap.sections[secKey].rows || [];
-      const n = (isOgSec(secKey) && WroModule.explodeOgnivoRows)
-        ? WroModule.explodeOgnivoRows(headers, raw).length
+      const capKind = splitKindOf(secKey);
+      const n = (capKind && WroModule.explodeSplitRows)
+        ? WroModule.explodeSplitRows(headers, raw, capKind).length
         : raw.length;
       return `<button type="button" class="zob-maj-cap" onclick="ZobowiazaniModule.openMajatekSection('${sid}')">${icon} ${escapeHtml(label)} <span>${n}</span></button>`;
     }).join('');
@@ -1127,32 +1218,33 @@ const ZobowiazaniModule = (() => {
       const icon = iconMeta ? iconMeta.icon : '📄';
       const label = iconMeta ? iconMeta.label : secKey.replace('Wynik: ', '');
       const isAction = secKey.startsWith('Wynik:');
-      const isOg = isOgSec(secKey);
+      const kind = splitKindOf(secKey);
+      const isOg = !!kind;
       const safe = secKey.replace(/[^a-zA-Z0-9]/g, '');
       const sid = 'zob-maj-' + pk + '-' + safe;
       const headers = Array.isArray(sec.headers) ? sec.headers : [];
       const rowsRaw = Array.isArray(sec.rows) ? sec.rows : [];
-      const rows = (isOg && WroModule.explodeOgnivoRows) ? WroModule.explodeOgnivoRows(headers, rowsRaw) : rowsRaw;
+      const rows = (kind && WroModule.explodeSplitRows) ? WroModule.explodeSplitRows(headers, rowsRaw, kind) : rowsRaw;
 
       const todoRows = [];
       const knownRows = [];
       rows.forEach(r => {
         const cells = Array.isArray(r) ? r : Object.keys(r || {}).sort().map(k => r[k]);
-        const canon = isOg && WroModule.ognivoCanonFromRow ? WroModule.ognivoCanonFromRow(headers, cells) : '';
-        const fp = isOg ? ('bank:' + canon) : cells.slice(0, 5).map(v => String(v || '')).join('||');
+        const canon = kind && WroModule.splitCanonFromRow ? WroModule.splitCanonFromRow(headers, cells, kind) : '';
+        const fp = kind ? (kind + ':' + canon) : cells.slice(0, 5).map(v => String(v || '')).join('||');
         const ann = isAction
-          ? (isOg && WroModule.findBankAnnotation
-            ? WroModule.findBankAnnotation(pk, canon)
+          ? (kind && WroModule.findSplitAnnotation
+            ? WroModule.findSplitAnnotation(pk, canon, kind)
             : (WroModule.getAnnotation ? WroModule.getAnnotation(pk, safe, fp) : null))
           : null;
-        const pack = { r: cells, fp, ann, canon, bankLabel: isOg && WroModule.ognivoLabelFromRow ? WroModule.ognivoLabelFromRow(headers, cells) : '' };
+        const pack = { r: cells, fp, ann, canon, bankLabel: kind && WroModule.splitLabelFromRow ? WroModule.splitLabelFromRow(headers, cells, kind) : '' };
         if (isAction && ann && (ann.status === 'done' || ann.status === 'excluded')) knownRows.push(pack);
         else todoRows.push(pack);
       });
 
       const rowCard = (item, known) => {
         const ctxId = 'zwk' + (++_wroItemSeq);
-        _wroItemCtx[ctxId] = { pk, safe, fp: item.fp, bankCanon: item.canon || '' };
+        _wroItemCtx[ctxId] = { pk, safe, fp: item.fp, splitKind: kind || '', splitCanon: item.canon || '' };
         const title = item.bankLabel || wroRowPreview(headers, item.r);
         const fields = wroRowFieldsHtml(headers, item.r);
         const annot = isAction
@@ -1199,7 +1291,7 @@ const ZobowiazaniModule = (() => {
         ? `<span class="zob-asset-n" style="background:rgba(139,58,58,.12);color:var(--zob-spine)">do zajęcia ${pendingN}</span>`
         : '';
 
-      return `<section class="zob-maj-sec" id="${sid}" data-maj-sec="${sid}">
+      return `<section class="zob-maj-sec${openMaj.has(sid) ? ' open' : ''}" id="${sid}" data-maj-sec="${sid}">
         <button type="button" class="zob-maj-sec-hd" onclick="this.parentElement.classList.toggle('open')">
           <span class="zob-maj-sec-left">${icon} ${escapeHtml(label)} <span class="zob-asset-n">${rows.length}</span>${pendingBadge}${suspended && isAction ? ' <span class="zob-asset-n" style="background:rgba(122,85,36,.18);color:#7a5524">⏸</span>' : ''}</span>
           <span class="zob-maj-arrow">▼</span>
@@ -1380,6 +1472,7 @@ const ZobowiazaniModule = (() => {
       sortCol,
       sortDir,
       Object.keys(archiveMap).length,
+      Object.keys(removedMap).length,
       deskPins.length,
       freshKeys.size,
       (typeof WroModule !== 'undefined' && WroModule.getFirstSeenStamp) ? WroModule.getFirstSeenStamp() : '',
@@ -1390,6 +1483,9 @@ const ZobowiazaniModule = (() => {
       const info = extractPersonInfo(row);
       return { row, idx, info, key: personKeyFromInfo(info) };
     });
+
+    // Trwale usunięte (Wyczyść archiwum) — znikają wszędzie, bez wyjątków.
+    rowsWithIndex = rowsWithIndex.filter(item => !isRemoved(item.key));
 
     // Sekcje: Aktywne / Biurko / Archiwum
     rowsWithIndex = rowsWithIndex.filter(item => {
@@ -1428,8 +1524,12 @@ const ZobowiazaniModule = (() => {
       });
     } else if (activeFilter === 'has_cepik') {
       rowsWithIndex = rowsWithIndex.filter(item => !!getCepikForPerson(item.info));
+    } else if (activeFilter === 'wro_new_pending') {
+      rowsWithIndex = rowsWithIndex.filter(item => wroFlagsForKey(item.key).newPending);
     } else if (activeFilter === 'wro_new') {
       rowsWithIndex = rowsWithIndex.filter(item => wroFlagsForKey(item.key).pending);
+    } else if (activeFilter === 'wro_ognivo') {
+      rowsWithIndex = rowsWithIndex.filter(item => wroFlagsForKey(item.key).pendingOgnivo);
     } else if (activeFilter === 'wro_first') {
       rowsWithIndex = rowsWithIndex.filter(item => wroFlagsForKey(item.key).firstSeen);
     } else if (activeFilter.startsWith('no_')) {
@@ -1508,6 +1608,7 @@ const ZobowiazaniModule = (() => {
     let active = 0, desk = 0, archive = 0, suspended = 0;
     dbSheet.rows.forEach(r => {
       const key = personKeyFromRow(r);
+      if (isRemoved(key)) return;
       if (isArchived(key)) archive++;
       else if (isSuspendedRow(r)) suspended++;
       else {
@@ -1519,11 +1620,18 @@ const ZobowiazaniModule = (() => {
   }
 
   function computeFilterCounts() {
-    if (!dbSheet || !dbSheet.rows) return { all: 0, todo: 0, progress: 0, complete: 0, cepik: 0, deferred: 0, due: 0, wroNew: 0, wroFirst: 0 };
-    let todo = 0, progress = 0, complete = 0, cepikCount = 0, deferred = 0, due = 0, wroNew = 0, wroFirst = 0;
+    if (!dbSheet || !dbSheet.rows) return { all: 0, todo: 0, progress: 0, complete: 0, cepik: 0, deferred: 0, due: 0, wroNew: 0, wroFirst: 0, wroOgnivo: 0, wroNewPending: 0 };
+    // Skanowanie całej listy jest tanie samo w sobie, ale jest wołane po każdej
+    // drobnej akcji — cache'ujemy wynik i liczymy od nowa tylko gdy coś, co
+    // wpływa na liczniki, faktycznie się zmieniło (patrz: _countsDirty).
+    if (!_countsDirty && _countsCache && _countsCache.rowsRef === dbSheet.rows) {
+      return _countsCache.counts;
+    }
+    let todo = 0, progress = 0, complete = 0, cepikCount = 0, deferred = 0, due = 0, wroNew = 0, wroFirst = 0, wroOgnivo = 0, wroNewPending = 0;
     let scoped = 0;
     dbSheet.rows.forEach(r => {
       const key = personKeyFromRow(r);
+      if (isRemoved(key)) return;
       const archived = isArchived(key);
       if (sectionFilter === 'archive' && !archived) return;
       if (sectionFilter === 'desk' && (!(isPinned(key) && !archived))) return;
@@ -1548,21 +1656,32 @@ const ZobowiazaniModule = (() => {
       if (!archived && !isSuspendedRow(r) && wroFlagsForKey(key).pending) {
         wroNew++;
       }
+      if (!archived && !isSuspendedRow(r) && wroFlagsForKey(key).pendingOgnivo) {
+        wroOgnivo++;
+      }
       if (wroFlagsForKey(key).firstSeen) {
         wroFirst++;
       }
+      if (!archived && !isSuspendedRow(r) && wroFlagsForKey(key).newPending) {
+        wroNewPending++;
+      }
     });
-    return { all: scoped, todo, progress, complete, cepik: cepikCount, deferred, due, wroNew, wroFirst };
+    const counts = { all: scoped, todo, progress, complete, cepik: cepikCount, deferred, due, wroNew, wroFirst, wroOgnivo, wroNewPending };
+    _countsCache = { rowsRef: dbSheet.rows, counts };
+    _countsDirty = false;
+    return counts;
   }
 
   function wroFlagsForKey(key) {
-    const empty = { sources: [], dochodMax: 0, pending: false, firstSeen: false };
+    const empty = { sources: [], dochodMax: 0, pending: false, pendingOgnivo: false, firstSeen: false, newPending: false };
     if (!key) return empty;
     if (_wroFlagCache.has(key)) return _wroFlagCache.get(key);
     const flags = (typeof WroModule !== 'undefined' && WroModule.getPersonWroFlags)
       ? (WroModule.getPersonWroFlags(key) || empty)
       : empty;
     if (typeof flags.firstSeen !== 'boolean') flags.firstSeen = false;
+    if (typeof flags.pendingOgnivo !== 'boolean') flags.pendingOgnivo = false;
+    if (typeof flags.newPending !== 'boolean') flags.newPending = flags.firstSeen && flags.pending;
     _wroFlagCache.set(key, flags);
     return flags;
   }
@@ -1642,6 +1761,7 @@ const ZobowiazaniModule = (() => {
               <button class="zob-action-btn primary" onclick="ZobowiazaniModule.loadJsonFile()" title="Wczytaj bazę z pliku JSON / JS">Wczytaj bazę</button>
               <button class="zob-action-btn ${filtersOpen ? 'is-on' : ''}" onclick="ZobowiazaniModule.toggleFilters()" title="Pokaż / ukryj filtry">Filtry${activeFilter !== 'all' || filterText || sourceFilters.size ? ' ·' : ''}</button>
               <button class="zob-action-btn" onclick="ZobowiazaniModule.refreshFromArkusz()" title="Pobierz aktualną bazę z Arkusza">Odśwież</button>
+              <button class="zob-action-btn" onclick="window.showEgzLegend && window.showEgzLegend()" title="Objaśnienie wszystkich odznak i filtrów (nowość, brak w Szafce, brak wcześniej...)">❓ Legenda</button>
               <button class="zob-action-btn olive" onclick="ZobowiazaniModule.copyCleanExcel()" title="Kopiuje widoczne teczki jako czysty tekst do Excela">Do Excela</button>
             </div>
           </div>
@@ -1691,19 +1811,30 @@ const ZobowiazaniModule = (() => {
               <button class="zob-pill pill-warn ${activeFilter === 'due' ? 'active' : ''}" onclick="ZobowiazaniModule.setFilter('due')">
                 Do powrotu <span class="zob-pill-count">${counts.due}</span>
               </button>
+              ${(counts.wroNew > 0 || counts.wroOgnivo > 0 || counts.wroFirst > 0 || counts.wroNewPending > 0) ? '<span class="zob-pill-glabel" id="zob-wro-glabel" title="Filtry pochodzące z Analityki WRO">WRO:</span>' : ''}
+              ${counts.wroNewPending > 0 ? `
+                <button class="zob-pill pill-hot ${activeFilter === 'wro_new_pending' ? 'active' : ''}" id="zob-wro-newpending-pill" onclick="ZobowiazaniModule.setFilter('wro_new_pending')" title="Najważniejszy filtr po wgraniu nowej bazy: podmioty, których NIE było wcześniej I mają coś nieoznaczonego (bank/JPK/AUM bez Zrobione/Wyklucz).">
+                  🎯 Nowe do zajęcia <span class="zob-pill-count">${counts.wroNewPending}</span>
+                </button>
+              ` : ''}
               ${counts.wroNew > 0 ? `
-                <button class="zob-pill pill-danger ${activeFilter === 'wro_new' ? 'active' : ''}" onclick="ZobowiazaniModule.setFilter('wro_new')" title="Osoby z wpisami do zajęcia — bank/JPK/AUM bez Zrobione lub Wyklucz. Po nowej synchronizacji zostają tylko nowe, jeszcze nieoznaczone.">
+                <button class="zob-pill pill-danger ${activeFilter === 'wro_new' ? 'active' : ''}" id="zob-wro-new-pill" onclick="ZobowiazaniModule.setFilter('wro_new')" title="Wszyscy z wpisami do zajęcia — bank/JPK/AUM bez Zrobione lub Wyklucz (także ci, którzy byli już wcześniej w bazie).">
                   🔥 Nowość WRO <span class="zob-pill-count">${counts.wroNew}</span>
                 </button>
               ` : ''}
+              ${counts.wroOgnivo > 0 ? `
+                <button class="zob-pill pill-danger ${activeFilter === 'wro_ognivo' ? 'active' : ''}" id="zob-wro-ognivo-pill" onclick="ZobowiazaniModule.setFilter('wro_ognivo')" title="Osoby z bankami OGNIVO bez Zrobione lub Wyklucz (tylko OGNIVO, bez JPK/AUM).">
+                  🏦 Nowe banki OGNIVO <span class="zob-pill-count">${counts.wroOgnivo}</span>
+                </button>
+              ` : ''}
               ${counts.wroFirst > 0 ? `
-                <button class="zob-pill pill-ok ${activeFilter === 'wro_first' ? 'active' : ''}" id="zob-wro-first-pill" onclick="ZobowiazaniModule.setFilter('wro_first')" title="Osoby z ostatniego raportu WRO, które nie miały wcześniej wpisu w bazie ani w Majątku. To nie to samo co 🔥 Nowość WRO.">
+                <button class="zob-pill pill-ok ${activeFilter === 'wro_first' ? 'active' : ''}" id="zob-wro-first-pill" onclick="ZobowiazaniModule.setFilter('wro_first')" title="Osoby z ostatniego raportu WRO, które nie miały wcześniej wpisu w bazie ani w Majątku — samo pojawienie się, niezależnie czy jest coś do zajęcia.">
                   🆕 Bez wcześniejszego wpisu <span class="zob-pill-count">${counts.wroFirst}</span>
                 </button>
               ` : ''}
               ${freshKeys.size ? `
-                <button class="zob-pill pill-ok ${activeFilter === 'fresh' ? 'active' : ''}" onclick="ZobowiazaniModule.setFilter('fresh')" id="zob-fresh-pill">
-                  Nowe <span class="zob-pill-count">${freshKeys.size}</span>
+                <button class="zob-pill pill-ok ${activeFilter === 'fresh' ? 'active' : ''}" onclick="ZobowiazaniModule.setFilter('fresh')" id="zob-fresh-pill" title="Wiersze, które przed chwilą przybyły z Excela/Arkusza — nie ma to związku z raportami WRO.">
+                  🗂 Nowe w Arkuszu <span class="zob-pill-count">${freshKeys.size}</span>
                 </button>
               ` : ''}
               ${counts.cepik > 0 ? `
@@ -1723,8 +1854,8 @@ const ZobowiazaniModule = (() => {
 
           <div class="zob-split-container mode-${viewMode}" id="zob-split">
             <aside class="zob-drawer" id="zob-drawer">
-              <div class="zob-drawer-head">
-                <span class="zob-drawer-head-title">${sectionFilter === 'desk' ? 'Biurko' : sectionFilter === 'archive' ? 'Archiwum' : sectionFilter === 'suspended' ? 'Zawieszone' : 'Lista zobowiązanych'}</span>
+              <div class="zob-drawer-head" id="zob-drawer-head">
+                <span class="zob-drawer-head-title" id="zob-drawer-head-title">${sectionFilter === 'desk' ? 'Biurko' : sectionFilter === 'archive' ? 'Archiwum' : sectionFilter === 'suspended' ? 'Zawieszone' : 'Lista zobowiązanych'}</span>
                 <span class="zob-drawer-count" id="zob-drawer-count">0</span>
               </div>
               <div class="zob-folder-scroll" id="zob-folder-list"></div>
@@ -1837,6 +1968,39 @@ const ZobowiazaniModule = (() => {
       updatePillsBar();
       updateSectionsBar();
     }
+    updateDrawerHead();
+  }
+
+  /** Sekcje (Aktywne/Biurko/Zawieszone/Archiwum) są przełączane bez pełnego
+   *  re-renderu (`renderViews`, nie `render`), więc nagłówek szuflady (tytuł +
+   *  przycisk „Wyczyść archiwum”) trzeba zaktualizować osobno — inaczej
+   *  przycisk, który zależy od `sectionFilter`, nigdy by się nie pojawił
+   *  (statyczny HTML jest generowany raz, przy pierwszym `render()`). */
+  function updateDrawerHead() {
+    const titleEl = document.getElementById('zob-drawer-head-title');
+    if (titleEl) {
+      titleEl.textContent = sectionFilter === 'desk' ? 'Biurko'
+        : sectionFilter === 'archive' ? 'Archiwum'
+        : sectionFilter === 'suspended' ? 'Zawieszone'
+        : 'Lista zobowiązanych';
+    }
+    const head = document.getElementById('zob-drawer-head');
+    if (!head) return;
+    let clearBtn = document.getElementById('zob-clear-archive-btn');
+    const showClear = sectionFilter === 'archive' && Object.keys(archiveMap).length > 0;
+    if (showClear && !clearBtn) {
+      clearBtn = document.createElement('button');
+      clearBtn.type = 'button';
+      clearBtn.id = 'zob-clear-archive-btn';
+      clearBtn.className = 'zob-action-btn';
+      clearBtn.style.cssText = 'height:26px;padding:0 10px;font-size:.72rem;color:#991b1b';
+      clearBtn.title = 'Trwale usuwa wszystkie teczki z Archiwum. Nie rusza danych w Arkuszu.';
+      clearBtn.setAttribute('onclick', 'ZobowiazaniModule.clearArchive()');
+      clearBtn.textContent = '🗑 Wyczyść archiwum';
+      head.appendChild(clearBtn);
+    } else if (!showClear && clearBtn) {
+      clearBtn.remove();
+    }
   }
 
   function updateSectionsBar() {
@@ -1878,20 +2042,69 @@ const ZobowiazaniModule = (() => {
     syncExtraFilterButtons();
     const bar = document.getElementById('zob-pills-bar');
     if (!bar) return;
-    let freshBtn = document.getElementById('zob-fresh-pill');
-    if (freshKeys.size) {
-      if (!freshBtn) {
-        freshBtn = document.createElement('button');
-        freshBtn.id = 'zob-fresh-pill';
-        freshBtn.className = 'zob-pill pill-ok';
-        freshBtn.setAttribute('onclick', "ZobowiazaniModule.setFilter('fresh')");
+    // Grupa pigułek "WRO:" — etykieta pojawia się/znika razem z pierwszą/ostatnią
+    // z czterech pigułek poniżej, żeby wizualnie oddzielić je od reszty (Braki/
+    // W toku/Komplet/Brak KAWA...) i nie mylić dwóch różnych światów "nowość".
+    const anyWro = counts.wroNewPending > 0 || counts.wroNew > 0 || counts.wroOgnivo > 0 || counts.wroFirst > 0;
+    let wroLabel = document.getElementById('zob-wro-glabel');
+    if (anyWro && !wroLabel) {
+      wroLabel = document.createElement('span');
+      wroLabel.id = 'zob-wro-glabel';
+      wroLabel.className = 'zob-pill-glabel';
+      wroLabel.title = 'Filtry pochodzące z Analityki WRO';
+      wroLabel.textContent = 'WRO:';
+      const sep = bar.querySelector('.zob-pill-sep');
+      bar.insertBefore(wroLabel, sep || null);
+    } else if (!anyWro && wroLabel) {
+      wroLabel.remove();
+    }
+    let wroNewPendingBtn = document.getElementById('zob-wro-newpending-pill');
+    if (counts.wroNewPending > 0) {
+      if (!wroNewPendingBtn) {
+        wroNewPendingBtn = document.createElement('button');
+        wroNewPendingBtn.id = 'zob-wro-newpending-pill';
+        wroNewPendingBtn.className = 'zob-pill pill-hot';
+        wroNewPendingBtn.title = 'Najważniejszy filtr po wgraniu nowej bazy: podmioty, których NIE było wcześniej I mają coś nieoznaczonego (bank/JPK/AUM bez Zrobione/Wyklucz).';
+        wroNewPendingBtn.setAttribute('onclick', "ZobowiazaniModule.setFilter('wro_new_pending')");
         const sep = bar.querySelector('.zob-pill-sep');
-        bar.insertBefore(freshBtn, sep || null);
+        bar.insertBefore(wroNewPendingBtn, sep || null);
       }
-      freshBtn.innerHTML = `Nowe <span class="zob-pill-count">${freshKeys.size}</span>`;
-    } else if (freshBtn) {
-      freshBtn.remove();
-      if (activeFilter === 'fresh') activeFilter = 'all';
+      wroNewPendingBtn.innerHTML = `🎯 Nowe do zajęcia <span class="zob-pill-count">${counts.wroNewPending}</span>`;
+    } else if (wroNewPendingBtn) {
+      wroNewPendingBtn.remove();
+      if (activeFilter === 'wro_new_pending') activeFilter = 'all';
+    }
+    let wroNewBtn = document.getElementById('zob-wro-new-pill');
+    if (counts.wroNew > 0) {
+      if (!wroNewBtn) {
+        wroNewBtn = document.createElement('button');
+        wroNewBtn.id = 'zob-wro-new-pill';
+        wroNewBtn.className = 'zob-pill pill-danger';
+        wroNewBtn.title = 'Wszyscy z wpisami do zajęcia — bank/JPK/AUM bez Zrobione lub Wyklucz (także ci, którzy byli już wcześniej w bazie).';
+        wroNewBtn.setAttribute('onclick', "ZobowiazaniModule.setFilter('wro_new')");
+        const sep = bar.querySelector('.zob-pill-sep');
+        bar.insertBefore(wroNewBtn, sep || null);
+      }
+      wroNewBtn.innerHTML = `🔥 Nowość WRO <span class="zob-pill-count">${counts.wroNew}</span>`;
+    } else if (wroNewBtn) {
+      wroNewBtn.remove();
+      if (activeFilter === 'wro_new') activeFilter = 'all';
+    }
+    let wroOgnivoBtn = document.getElementById('zob-wro-ognivo-pill');
+    if (counts.wroOgnivo > 0) {
+      if (!wroOgnivoBtn) {
+        wroOgnivoBtn = document.createElement('button');
+        wroOgnivoBtn.id = 'zob-wro-ognivo-pill';
+        wroOgnivoBtn.className = 'zob-pill pill-danger';
+        wroOgnivoBtn.title = 'Osoby z bankami OGNIVO bez Zrobione lub Wyklucz (tylko OGNIVO, bez JPK/AUM).';
+        wroOgnivoBtn.setAttribute('onclick', "ZobowiazaniModule.setFilter('wro_ognivo')");
+        const sep = bar.querySelector('.zob-pill-sep');
+        bar.insertBefore(wroOgnivoBtn, sep || null);
+      }
+      wroOgnivoBtn.innerHTML = `🏦 Nowe banki OGNIVO <span class="zob-pill-count">${counts.wroOgnivo}</span>`;
+    } else if (wroOgnivoBtn) {
+      wroOgnivoBtn.remove();
+      if (activeFilter === 'wro_ognivo') activeFilter = 'all';
     }
     let firstBtn = document.getElementById('zob-wro-first-pill');
     if (counts.wroFirst > 0) {
@@ -1899,7 +2112,7 @@ const ZobowiazaniModule = (() => {
         firstBtn = document.createElement('button');
         firstBtn.id = 'zob-wro-first-pill';
         firstBtn.className = 'zob-pill pill-ok';
-        firstBtn.title = 'Osoby z ostatniego raportu WRO, które nie miały wcześniej wpisu w bazie ani w Majątku. To nie to samo co 🔥 Nowość WRO.';
+        firstBtn.title = 'Osoby z ostatniego raportu WRO, które nie miały wcześniej wpisu w bazie ani w Majątku — samo pojawienie się, niezależnie czy jest coś do zajęcia.';
         firstBtn.setAttribute('onclick', "ZobowiazaniModule.setFilter('wro_first')");
         const sep = bar.querySelector('.zob-pill-sep');
         bar.insertBefore(firstBtn, sep || null);
@@ -1908,6 +2121,22 @@ const ZobowiazaniModule = (() => {
     } else if (firstBtn) {
       firstBtn.remove();
       if (activeFilter === 'wro_first') activeFilter = 'all';
+    }
+    let freshBtn = document.getElementById('zob-fresh-pill');
+    if (freshKeys.size) {
+      if (!freshBtn) {
+        freshBtn = document.createElement('button');
+        freshBtn.id = 'zob-fresh-pill';
+        freshBtn.className = 'zob-pill pill-ok';
+        freshBtn.title = 'Wiersze, które przed chwilą przybyły z Excela/Arkusza — nie ma to związku z raportami WRO.';
+        freshBtn.setAttribute('onclick', "ZobowiazaniModule.setFilter('fresh')");
+        const sep = bar.querySelector('.zob-pill-sep');
+        bar.insertBefore(freshBtn, sep || null);
+      }
+      freshBtn.innerHTML = `🗂 Nowe w Arkuszu <span class="zob-pill-count">${freshKeys.size}</span>`;
+    } else if (freshBtn) {
+      freshBtn.remove();
+      if (activeFilter === 'fresh') activeFilter = 'all';
     }
     bar.querySelectorAll('.zob-pill').forEach(btn => {
       const onclick = btn.getAttribute('onclick') || '';
@@ -2193,7 +2422,8 @@ const ZobowiazaniModule = (() => {
     saveData();
   }
 
-  function renderDetailOnly() {
+  function renderDetailOnly(opts) {
+    opts = opts || {};
     const detailContent = document.getElementById('zob-detail-content');
     if (!detailContent || !dbSheet || !dbSheet.rows) return;
 
@@ -2343,7 +2573,7 @@ const ZobowiazaniModule = (() => {
         `;
       }
     } else if (detailTab === 'majatek') {
-      bodyHtml = renderMajatekHtml(info, r);
+      bodyHtml = renderMajatekHtml(info, r, captureMajOpenState());
     } else {
       bodyHtml = `
         <div class="zob-sheet">
@@ -2353,13 +2583,24 @@ const ZobowiazaniModule = (() => {
       `;
     }
 
+    // Odświeżenie tylko treści zakładki (np. po oznaczeniu wpisu WRO) — bez
+    // przebudowy nagłówka/tabów/stopki, żeby nie tracić stanu i nie migać całą teczką.
+    if (opts.bodyOnly) {
+      const existingBody = detailContent.querySelector('.zob-open-body');
+      if (existingBody) {
+        existingBody.setAttribute('key', `${detailTab}-${animKey}`);
+        existingBody.innerHTML = `${detailTab !== 'dane' ? deferBanner : ''}${bodyHtml}`;
+        return;
+      }
+    }
+
     detailContent.innerHTML = `
       <div class="zob-open-header" data-anim="${animKey}">
         <div class="zob-open-header-main">
           <div class="zob-open-title">${escapeHtml(info.name)}</div>
           ${(info.pesel || info.nip || info.adresStr) ? `<div class="zob-open-ids">
-            ${info.pesel ? `<button type="button" class="zob-id-chip" title="Kopiuj PESEL" onclick="ZobowiazaniModule.copy('${info.pesel}', this)"><span class="lbl">PESEL</span>${info.pesel}</button>` : ''}
-            ${info.nip ? `<button type="button" class="zob-id-chip" title="Kopiuj NIP" onclick="ZobowiazaniModule.copy('${info.nip}', this)"><span class="lbl">NIP</span>${info.nip}</button>` : ''}
+            ${info.pesel ? `<button type="button" class="zob-id-chip" title="Kopiuj PESEL (oznacza KAWA jako zrobione dziś)" onclick="ZobowiazaniModule.copyId('${info.pesel}', this, ${selectedRowIndex})"><span class="lbl">PESEL</span>${info.pesel}</button>` : ''}
+            ${info.nip ? `<button type="button" class="zob-id-chip" title="Kopiuj NIP (oznacza KAWA jako zrobione dziś)" onclick="ZobowiazaniModule.copyId('${info.nip}', this, ${selectedRowIndex})"><span class="lbl">NIP</span>${info.nip}</button>` : ''}
             ${info.adresStr ? `<button type="button" class="zob-open-addr" title="Kopiuj adres" onclick="ZobowiazaniModule.copy(decodeURIComponent('${encodeURIComponent(info.adresStr)}'), this)">${escapeHtml(info.adresStr)}</button>` : ''}
           </div>` : ''}
           <div class="zob-open-sub"><span class="zob-status-chip ${st.cls}">${st.label}</span>${rowZawieszone(r) ? ` · od ${escapeHtml(rowZawieszone(r))}` : ''} · ${sysCount}/5 systemów · #${selectedRowIndex + 1}${cepik ? ' · 🚗 CEPIK' : ''}${defer ? ` · <span class="zob-defer-chip ${defer.due ? 'due' : 'wait'}">${defer.due ? 'Do powrotu' : 'Na później'} ${escapeHtml(defer.raw)}</span>` : ''}</div>
@@ -2635,6 +2876,7 @@ const ZobowiazaniModule = (() => {
 
   function setSection(sec) {
     sectionFilter = (sec === 'desk' || sec === 'archive' || sec === 'suspended') ? sec : 'active';
+    _countsDirty = true;
     renderViews();
   }
 
@@ -2643,6 +2885,7 @@ const ZobowiazaniModule = (() => {
     ensureSystemColumns(dbSheet);
     const ci = dbSheet.columns.indexOf(SUSPEND_COL);
     if (ci < 0) return;
+    markSuspendDirty();
     const r = dbSheet.rows[ri];
     while (r.length < dbSheet.columns.length) r.push('');
     if (isSuspendedRow(r)) {
@@ -2688,6 +2931,31 @@ const ZobowiazaniModule = (() => {
     renderViews();
   }
 
+  /** Trwale usuwa (ukrywa na zawsze) wszystkie teczki aktualnie w Archiwum.
+   *  Nie rusza wierszy w dbSheet/Arkuszu — tylko dopisuje klucze do
+   *  `removedMap`, więc znikają ze wszystkich sekcji/filtrów/liczników
+   *  bez przesuwania indeksów wierszy (co mogłoby podmienić otwarte karty). */
+  function clearArchive() {
+    const keys = Object.keys(archiveMap);
+    if (!keys.length) return;
+    if (!confirm(`Na pewno trwale usunąć ${keys.length} teczek(i) z Archiwum? Tej operacji nie można cofnąć (dane w Arkuszu pozostają bez zmian).`)) return;
+    const now = new Date().toISOString();
+    keys.forEach(key => {
+      removedMap[key] = { at: now, name: (archiveMap[key] && archiveMap[key].name) || '' };
+      delete archiveMap[key];
+      closeTab(key);
+      const i = deskPins.indexOf(key);
+      if (i >= 0) deskPins.splice(i, 1);
+      freshKeys.delete(key);
+    });
+    persistRemoved();
+    persistArchive();
+    persistDeskPins();
+    invalidateListCache();
+    renderViews();
+    if (typeof showToast === 'function') showToast(`🗑 Wyczyszczono Archiwum (${keys.length})`, 'info', 2500);
+  }
+
   function isSuspended(key) {
     const pk = String(key || '').replace(/\D/g, '') || String(key || '');
     if (!pk || !dbSheet) return false;
@@ -2720,13 +2988,13 @@ const ZobowiazaniModule = (() => {
     if (!ctx) return;
     if (typeof WroModule === 'undefined') return;
     const data = status ? { status } : null;
-    if (ctx.bankCanon && typeof WroModule.setOgnivoBankStatus === 'function') {
-      WroModule.setOgnivoBankStatus(ctx.pk, ctx.bankCanon, data);
+    if (ctx.splitKind && ctx.splitCanon && typeof WroModule.setSplitStatus === 'function') {
+      WroModule.setSplitStatus(ctx.pk, ctx.splitCanon, data, ctx.splitKind);
     } else if (WroModule.setAnnotationData) {
       WroModule.setAnnotationData(ctx.pk, ctx.safe, ctx.fp, data);
     } else return;
     invalidateListCache();
-    renderDetailOnly();
+    renderDetailOnly({ bodyOnly: true });
     updatePillsBar();
   }
 
@@ -2992,6 +3260,7 @@ const ZobowiazaniModule = (() => {
   function lookupById(id) {
     const want = String(id || '').replace(/\D/g, '');
     if (!want || want.length < 10) return null;
+    if (isRemoved(want)) return null;
     return getIdIndex()[want] || null;
   }
 
@@ -3009,6 +3278,10 @@ const ZobowiazaniModule = (() => {
     const savedArchive = loadJsonKey(ARCHIVE_IDS_KEY, {});
     if (savedArchive && typeof savedArchive === 'object' && !Array.isArray(savedArchive)) {
       archiveMap = savedArchive;
+    }
+    const savedRemoved = loadJsonKey(REMOVED_IDS_KEY, {});
+    if (savedRemoved && typeof savedRemoved === 'object' && !Array.isArray(savedRemoved)) {
+      removedMap = savedRemoved;
     }
     const container = document.getElementById('zobowiazani-app');
     const alreadyLive = activated && dbSheet && container && container.querySelector('.zob-header');
@@ -3054,6 +3327,7 @@ const ZobowiazaniModule = (() => {
     togglePin,
     toggleSuspend,
     archivePerson,
+    clearArchive,
     applyArchiveIds,
     afterExcelRefresh,
     isSuspended,
@@ -3075,6 +3349,7 @@ const ZobowiazaniModule = (() => {
     expandMajatek,
     copyCleanExcel: copyCleanExcelText,
     copy: copyToClipboard,
+    copyId: copyIdAndMarkKawa,
     loadJsonFile: triggerFilePicker,
     refreshFromArkusz,
     deferDays: deferByDays,

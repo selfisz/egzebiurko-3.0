@@ -14,6 +14,7 @@ const WroModule = (() => {
   let activeFilters = new Set();
   let filterNoFolder = false;
   let filterFirstSeen = false;
+  let filterNewPending = false;
   let currentActiveId = null;
   let activated   = false;
   let _currentAnnotBid = null;
@@ -75,15 +76,50 @@ const WroModule = (() => {
     });
     return max;
   }
+  /* ─── WIELO-WPISOWE ŹRÓDŁA (OGNIVO / AUM) ─────────────────
+     Zarówno OGNIVO ("1240 Pekao | 1140 mBank"), jak i AUM
+     ("12400001 Bank Polska Kasa Opieki S.A.; 10200003 PKO BP S.A.")
+     to jedna komórka z kilkoma podmiotami rozdzielonymi „|” albo „;”.
+     Poniższe funkcje są sparametryzowane przez `kind` ('ognivo' | 'aum'),
+     żeby rozbijać obie na osobne, adresowalne karty bez duplikowania
+     logiki. Stare nazwy (bankCodeCanon, explodeOgnivoRows, …) zostają
+     jako cienkie „wrappery” z kind='ognivo', żeby nie ruszać wszystkich
+     miejsc, które ich już używają. ─── */
+  function detectSplitKind(src) {
+    const s = String(src || '');
+    if (/ognivo/i.test(s)) return 'ognivo';
+    if (/\baum\b/i.test(s)) return 'aum';
+    return null;
+  }
   function isOgnivoSource(src) {
-    return /ognivo/i.test(String(src || ''));
+    return detectSplitKind(src) === 'ognivo';
+  }
+  function isAumSource(src) {
+    return detectSplitKind(src) === 'aum';
+  }
+  function isSplitSource(src) {
+    return !!detectSplitKind(src);
   }
 
-  function bankCodeCanon(text) {
-    const d = String(text || '').replace(/\D/g, '');
-    if (d.length >= 4) return d.slice(0, 4);
+  const SPLIT_ANNOT_SECTION = { ognivo: 'WynikOGNIVO', aum: 'WynikAUM' };
+  const SPLIT_LEGACY_SECTION = { ognivo: 'OGNIVOStore', aum: 'AUMStore' };
+  const SPLIT_IID_PREFIX = { ognivo: 'bank:', aum: 'aum:' };
+  const SPLIT_DEFAULT_LABEL = { ognivo: 'Bank', aum: 'Instytucja' };
+
+  function splitCodeCanon(text, kind) {
+    const s = String(text || '').trim();
+    // Bierzemy wiodący ciąg cyfr (kod na początku komórki) — nie same
+    // /\D/g, żeby przypadkowa cyfra w nazwie instytucji (np. „Fundusz 2”)
+    // nie zniekształciła kodu.
+    const lead = s.match(/^\d+/);
+    const d = lead ? lead[0] : s.replace(/\D/g, '');
+    if (kind === 'ognivo') return d.length >= 4 ? d.slice(0, 4) : d;
+    // AUM: kody instytucji bywają dłuższe (np. 8 cyfr) — bierzemy cały
+    // wiodący ciąg cyfr, żeby nie mylić różnych podmiotów o wspólnym prefiksie.
     return d;
   }
+  function bankCodeCanon(text) { return splitCodeCanon(text, 'ognivo'); }
+  function aumCodeCanon(text) { return splitCodeCanon(text, 'aum'); }
 
   function splitBankParts(text) {
     const s = String(text || '').trim();
@@ -94,19 +130,23 @@ const WroModule = (() => {
     return [s];
   }
 
-  function ognivoBankColIndex(headers) {
+  function splitEntryColIndex(headers, kind) {
     const hLower = (headers || []).map(h => String(h || '').toLowerCase());
-    const idx = hLower.findIndex(h => /bank|kod\s*bank|instytucj/i.test(h));
+    const pattern = kind === 'aum'
+      ? /instytucj|towarzystw|fundusz|aum|nazwa|podmiot/i
+      : /bank|kod\s*bank|instytucj/i;
+    const idx = hLower.findIndex(h => pattern.test(h));
     return idx >= 0 ? idx : 0;
   }
+  function ognivoBankColIndex(headers) { return splitEntryColIndex(headers, 'ognivo'); }
 
-  function explodeOgnivoRows(headers, bodyRows) {
-    const bankIdx = ognivoBankColIndex(headers);
+  function explodeSplitRows(headers, bodyRows, kind) {
+    const colIdx = splitEntryColIndex(headers, kind);
     const out = [];
     const seen = new Set();
     (bodyRows || []).forEach(row => {
       const cells = Array.isArray(row) ? row.slice() : [row];
-      let col = bankIdx;
+      let col = colIdx;
       let blob = cells[col];
       if (!/[|;]/.test(String(blob || ''))) {
         const alt = cells.findIndex(c => /[|;]/.test(String(c || '')) && /\d{3,8}/.test(String(c || '')));
@@ -118,9 +158,9 @@ const WroModule = (() => {
         const copy = cells.slice();
         if (part) {
           copy[col] = part;
-          copy[bankIdx] = part;
+          copy[colIdx] = part;
         }
-        const canon = bankCodeCanon(part || copy.join(' '));
+        const canon = splitCodeCanon(part || copy.join(' '), kind);
         const dedupe = canon || String(part || copy.join('|')).toLowerCase();
         if (dedupe && seen.has(dedupe)) return;
         if (dedupe) seen.add(dedupe);
@@ -129,21 +169,35 @@ const WroModule = (() => {
     });
     return out;
   }
+  function explodeOgnivoRows(headers, bodyRows) { return explodeSplitRows(headers, bodyRows, 'ognivo'); }
+  function explodeAumRows(headers, bodyRows) { return explodeSplitRows(headers, bodyRows, 'aum'); }
 
-  function ognivoLabelFromRow(headers, row) {
-    const idx = ognivoBankColIndex(headers);
+  function splitLabelFromRow(headers, row, kind) {
+    const idx = splitEntryColIndex(headers, kind);
     const raw = String((row && row[idx]) != null ? row[idx] : (row || []).filter(Boolean).join(' ')).trim();
-    return raw || 'Bank';
+    return raw || SPLIT_DEFAULT_LABEL[kind] || 'Wpis';
+  }
+  function ognivoLabelFromRow(headers, row) { return splitLabelFromRow(headers, row, 'ognivo'); }
+  function aumLabelFromRow(headers, row) { return splitLabelFromRow(headers, row, 'aum'); }
+
+  function splitCanonFromRow(headers, row, kind) {
+    return splitCodeCanon(splitLabelFromRow(headers, row, kind), kind);
+  }
+  function ognivoCanonFromRow(headers, row) { return splitCanonFromRow(headers, row, 'ognivo'); }
+  function aumCanonFromRow(headers, row) { return splitCanonFromRow(headers, row, 'aum'); }
+
+  function splitKindFromSec(sec) {
+    const s = String(sec || '');
+    if (s === SPLIT_ANNOT_SECTION.ognivo || s === SPLIT_LEGACY_SECTION.ognivo || /ognivo/i.test(s)) return 'ognivo';
+    if (s === SPLIT_ANNOT_SECTION.aum || s === SPLIT_LEGACY_SECTION.aum || /^wynikaum$/i.test(s)) return 'aum';
+    return null;
   }
 
-  function ognivoCanonFromRow(headers, row) {
-    return bankCodeCanon(ognivoLabelFromRow(headers, row));
-  }
-
-  function findBankAnnotation(pk, canon) {
-    if (!pk || !canon) return null;
+  function findSplitAnnotation(pk, canon, kind) {
+    if (!pk || !canon || !kind) return null;
     const all = loadAnnotations();
     const prefix = pk + '|';
+    const iidPrefix = SPLIT_IID_PREFIX[kind];
     let found = null;
     Object.keys(all).forEach(k => {
       if (!k.startsWith(prefix)) return;
@@ -152,8 +206,8 @@ const WroModule = (() => {
       if (i2 < 0) return;
       const sec = rest.slice(0, i2);
       const iid = rest.slice(i2 + 1);
-      if (sec !== 'OGNIVOStore' && !/ognivo/i.test(sec)) return;
-      const c = bankCodeCanon(String(iid).replace(/^bank:/i, ''));
+      if (splitKindFromSec(sec) !== kind) return;
+      const c = splitCodeCanon(String(iid).replace(new RegExp('^' + iidPrefix, 'i'), ''), kind);
       if (c && c === canon) {
         const ann = all[k];
         if (!found || (ann && (ann.status === 'done' || ann.status === 'excluded'))) found = ann;
@@ -164,11 +218,14 @@ const WroModule = (() => {
     });
     return found;
   }
+  function findBankAnnotation(pk, canon) { return findSplitAnnotation(pk, canon, 'ognivo'); }
+  function findAumAnnotation(pk, canon) { return findSplitAnnotation(pk, canon, 'aum'); }
 
-  function setOgnivoBankStatus(pk, canon, data) {
-    if (!pk || !canon) return;
-    const iid = 'bank:' + canon;
-    setAnnotationData(pk, 'WynikOGNIVO', iid, data);
+  function setSplitStatus(pk, canon, data, kind) {
+    if (!pk || !canon || !kind) return;
+    const iid = SPLIT_IID_PREFIX[kind] + canon;
+    setAnnotationData(pk, SPLIT_ANNOT_SECTION[kind], iid, data);
+    if (kind !== 'ognivo') return;
     try {
       const ognivoData = SharedStore.get(SharedStore.KEYS.OGNIVO, {});
       Object.keys(ognivoData || {}).forEach(k => {
@@ -182,6 +239,8 @@ const WroModule = (() => {
       });
     } catch {}
   }
+  function setOgnivoBankStatus(pk, canon, data) { setSplitStatus(pk, canon, data, 'ognivo'); }
+  function setAumStatus(pk, canon, data) { setSplitStatus(pk, canon, data, 'aum'); }
 
   function mergeXmlOgnivoBanks(sections, entityId, personKey) {
     try {
@@ -217,28 +276,31 @@ const WroModule = (() => {
       if (!Array.isArray(rows) || rows.length <= 1) return;
       const headers = rows[0];
       const body = rows.slice(1);
+      const kind = detectSplitKind(k);
       out[k] = {
         updatedAt: todayIsoWro(),
         headers,
-        rows: isOgnivoSource(k) ? explodeOgnivoRows(headers, body) : body
+        rows: kind ? explodeSplitRows(headers, body, kind) : body
       };
     });
     mergeXmlOgnivoBanks(out, id, personKeyForEntity(id));
     return out;
   }
-  function sectionsHavePending(personKey, sections, entityId) {
+  function sectionsHavePending(personKey, sections, entityId, onlyOgnivo) {
     const annots = loadAnnotations();
     const pk = digitsId(personKey);
     for (const src of Object.keys(sections)) {
       if (!src.startsWith('Wynik:')) continue;
+      const kind = detectSplitKind(src);
+      if (onlyOgnivo && kind !== 'ognivo') continue;
       const safe = src.replace(/[^a-zA-Z0-9]/g, '');
       const sec = sections[src] || {};
       const headers = sec.headers || [];
-      const rows = isOgnivoSource(src) ? explodeOgnivoRows(headers, sec.rows || []) : (sec.rows || []);
+      const rows = kind ? explodeSplitRows(headers, sec.rows || [], kind) : (sec.rows || []);
       for (const row of rows) {
-        if (isOgnivoSource(src)) {
-          const canon = ognivoCanonFromRow(headers, row);
-          const ann = findBankAnnotation(pk, canon);
+        if (kind) {
+          const canon = splitCanonFromRow(headers, row, kind);
+          const ann = findSplitAnnotation(pk, canon, kind);
           if (!ann || (ann.status !== 'done' && ann.status !== 'excluded')) return true;
         } else {
           const fp = (row || []).slice(0, 5).map(v => String(v || '')).join('||');
@@ -247,29 +309,35 @@ const WroModule = (() => {
         }
       }
     }
-    try {
-      const ognivoData = SharedStore.get(SharedStore.KEYS.OGNIVO, {});
-      const entry = ognivoData[entityId] || ognivoData[pk];
-      if (entry && Array.isArray(entry.banks)) {
-        for (const b of entry.banks) {
-          const ann = findBankAnnotation(pk, bankCodeCanon(b)) || annots[buildAnnotKey(pk, 'OGNIVOStore', b)];
-          if (!ann || (ann.status !== 'done' && ann.status !== 'excluded')) return true;
-        }
-      }
-    } catch {}
+    // Uwaga: banki OGNIVO z plików XML (SharedStore) są już doklejone do
+    // `sections['Wynik: OGNIVO']` przez wywołującego (entitySectionsSnapshot /
+    // getMajatekSnapshot → mergeXmlOgnivoBanks), więc nie sprawdzamy ich tu
+    // jeszcze raz osobno — inaczej licznik pokazywałby banki, których nie widać
+    // w karcie osoby w Majątku (bo nie były zapisane w snapshotcie).
     return false;
   }
 
   function getMajatekSnapshot(personKey) {
     const pk = digitsId(personKey);
     if (!pk) return null;
-    return loadMajatekStore().people[pk] || null;
+    const snap = loadMajatekStore().people[pk];
+    if (!snap) return null;
+    // Banki OGNIVO z wgranych plików XML mogą przyjść już po ostatniej
+    // synchronizacji z Szafką — doklejamy je tutaj na żywo (bez zapisu do
+    // localStorage), żeby licznik „nowość” i widok Majątku zawsze pokazywały
+    // to samo, zamiast liczyć bank, którego nie widać w karcie osoby.
+    if (snap.sections) {
+      const merged = { ...snap.sections };
+      try { mergeXmlOgnivoBanks(merged, snap.entityId, pk); } catch {}
+      return { ...snap, sections: merged };
+    }
+    return snap;
   }
   function personHasSection(personKey, sectionKey) {
     const snap = getMajatekSnapshot(personKey);
     return !!(snap && snap.sections && snap.sections[sectionKey]);
   }
-  function hasPendingItemsForKey(personKey) {
+  function hasPendingItemsForKey(personKey, onlyOgnivo) {
     const pk = digitsId(personKey);
     if (!pk) return false;
     if (typeof ZobowiazaniModule !== 'undefined' && typeof ZobowiazaniModule.isSuspended === 'function' && ZobowiazaniModule.isSuspended(pk)) {
@@ -277,10 +345,54 @@ const WroModule = (() => {
     }
     const snap = getMajatekSnapshot(pk);
     if (!snap || !snap.sections) return false;
-    return sectionsHavePending(pk, snap.sections, snap.entityId);
+    return sectionsHavePending(pk, snap.sections, snap.entityId, onlyOgnivo);
   }
   function getPendingGoneCount() {
     return loadMajatekStore().pendingGone.length;
+  }
+
+  /* ─── „DO ZAJĘCIA” NA ŻYWO (bez czekania na sync z Szafką) ──
+     Licznik/filtr w samej Analityce WRO (lista po lewej) musi działać od razu
+     po wgraniu pliku, zanim ktokolwiek kliknie „Synchronizuj z Szafką” — bo
+     to właśnie wtedy użytkownik chce zobaczyć „co nowego i do zrobienia”.
+     hasPendingItemsForKey/getMajatekSnapshot korzystają z zapisanego stanu
+     Szafki, więc dla świeżo wczytanej bazy liczą 0. Tu liczymy wprost z
+     wczytanej bazy (bazaDanych) — ten sam mechanizm (sectionsHavePending),
+     inne źródło danych. Wynik jest cache'owany per id i czyszczony przy
+     zmianie adnotacji (_annotVersion) lub wczytaniu nowej bazy. ─── */
+  let _pendingLiveCache = new Map();
+  let _pendingLiveCacheVer = -1;
+  function invalidatePendingCache() {
+    _pendingLiveCache = new Map();
+    _pendingLiveCacheVer = -1;
+  }
+  function entityHasPendingLive(id) {
+    if (_pendingLiveCacheVer !== _annotVersion) {
+      _pendingLiveCache = new Map();
+      _pendingLiveCacheVer = _annotVersion;
+    }
+    if (_pendingLiveCache.has(id)) return _pendingLiveCache.get(id);
+    const pk = personKeyForEntity(id);
+    let result = false;
+    if (pk && !(typeof ZobowiazaniModule !== 'undefined' && typeof ZobowiazaniModule.isSuspended === 'function' && ZobowiazaniModule.isSuspended(pk))) {
+      try { result = sectionsHavePending(pk, entitySectionsSnapshot(id), id); } catch { result = false; }
+    }
+    _pendingLiveCache.set(id, result);
+    return result;
+  }
+  function entityIsNewPending(id) {
+    const pk = personKeyForEntity(id);
+    return !!pk && isFirstSeenPerson(pk) && entityHasPendingLive(id);
+  }
+  function countNewPending() {
+    const firstSet = firstSeenKeySet();
+    if (!firstSet.size) return 0;
+    let n = 0;
+    entities.forEach(({ id }) => {
+      const pk = personKeyForEntity(id);
+      if (pk && firstSet.has(pk) && entityHasPendingLive(id)) n++;
+    });
+    return n;
   }
   function getSourceCatalog() {
     return matrixColumns.map(k => ({ key: k, icon: icons[k] || '📄', safe: k.replace(/[^a-zA-Z0-9]/g, ''), label: k.replace('Wynik: ', '') }));
@@ -362,15 +474,20 @@ const WroModule = (() => {
   function getPersonWroFlags(personKey) {
     const pk = digitsId(personKey);
     const firstSeen = isFirstSeenPerson(pk);
-    if (!pk) return { sources: [], dochodMax: 0, pending: false, firstSeen: false };
+    if (!pk) return { sources: [], dochodMax: 0, pending: false, pendingOgnivo: false, firstSeen: false, newPending: false };
     const snap = getMajatekSnapshot(pk);
-    if (!snap || !snap.sections) return { sources: [], dochodMax: 0, pending: false, firstSeen };
+    if (!snap || !snap.sections) return { sources: [], dochodMax: 0, pending: false, pendingOgnivo: false, firstSeen, newPending: false };
     const suspended = typeof ZobowiazaniModule !== 'undefined' && typeof ZobowiazaniModule.isSuspended === 'function' && ZobowiazaniModule.isSuspended(pk);
+    const pending = suspended ? false : sectionsHavePending(pk, snap.sections, snap.entityId);
     return {
       sources: Object.keys(snap.sections),
       dochodMax: snap.dochodMax || 0,
-      pending: suspended ? false : sectionsHavePending(pk, snap.sections, snap.entityId),
-      firstSeen
+      pending,
+      pendingOgnivo: suspended ? false : sectionsHavePending(pk, snap.sections, snap.entityId, true),
+      firstSeen,
+      // Dokładnie to, o co pyta użytkownik po wgraniu nowej bazy: podmiot,
+      // którego nie było wcześniej, I ma coś nieoznaczonego do sprawdzenia.
+      newPending: firstSeen && pending
     };
   }
 
@@ -388,6 +505,22 @@ const WroModule = (() => {
     renderList(document.getElementById('wro-search')?.value || '');
     if (typeof ZobowiazaniModule !== 'undefined' && typeof ZobowiazaniModule.setFilter === 'function') {
       ZobowiazaniModule.setFilter('wro_first');
+    }
+  }
+
+  function showLegend() {
+    if (typeof window.showEgzLegend === 'function') window.showEgzLegend();
+  }
+
+  function filterNewPendingOnly() {
+    filterNewPending = true;
+    filterFirstSeen = false;
+    filterNoFolder = false;
+    activeFilters.clear();
+    initFilters();
+    renderList(document.getElementById('wro-search')?.value || '');
+    if (typeof ZobowiazaniModule !== 'undefined' && typeof ZobowiazaniModule.setFilter === 'function') {
+      ZobowiazaniModule.setFilter('wro_new_pending');
     }
   }
 
@@ -467,7 +600,8 @@ const WroModule = (() => {
       missing: missingList,
       news: newsN,
       goneCount: store.pendingGone.length,
-      firstSeen: firstSeenKeySet().size
+      firstSeen: firstSeenKeySet().size,
+      newPending: countNewPending()
     });
   }
 
@@ -487,29 +621,38 @@ const WroModule = (() => {
       </button>`).join('');
     const missHtml = summary.missing.length
       ? `<div class="wro-ldlg-note" style="text-align:left;padding:6px">
-          <div style="font-weight:700;margin-bottom:6px;padding:0 6px">📂 Bez teczki w Szafce — kliknij, aby otworzyć i dopasować ręcznie:</div>
+          <div style="font-weight:700;margin-bottom:6px;padding:0 6px">📂 Brak w Szafce — kliknij, aby otworzyć i dopasować ręcznie:</div>
           <div class="wro-missing-list">${missRows}</div>
-          ${summary.missing.length > 25 ? `<div style="padding:6px 6px 0;font-size:.75rem">…i ${summary.missing.length - 25} więcej — użyj filtra „Bez teczki” w WRO.</div>` : ''}
+          ${summary.missing.length > 25 ? `<div style="padding:6px 6px 0;font-size:.75rem">…i ${summary.missing.length - 25} więcej — użyj filtra „Brak w Szafce” w WRO.</div>` : ''}
         </div>`
       : '';
+    const newPending = summary.newPending || 0;
+    const leadHtml = newPending > 0 ? `
+          <div class="wro-ldlg-lead" onclick="document.getElementById('wro-sync-dlg').style.display='none';WroModule.filterNewPendingOnly()">
+            <div class="wro-ldlg-lead-num">🎯 ${newPending}</div>
+            <div class="wro-ldlg-lead-txt">
+              <strong>Nowe do zajęcia</strong> — tylu podmiotów nie było wcześniej I mają coś nieoznaczonego.<br>To najważniejsza liczba po wgraniu raportu — kliknij, aby je zobaczyć.
+            </div>
+          </div>` : '';
     dlg.innerHTML = `
       <div class="wro-ldlg-overlay" onclick="document.getElementById('wro-sync-dlg').style.display='none'">
         <div class="wro-ldlg-box" onclick="event.stopPropagation()">
-          <div class="wro-ldlg-title">🔄 Synchronizacja z Szafką</div>
+          <div class="wro-ldlg-title">🔄 Synchronizacja z Szafką <span class="wro-ldlg-help" onclick="event.stopPropagation();WroModule.showLegend()" title="Co oznaczają te liczby i odznaki?">❓</span></div>
+          ${leadHtml}
           <div class="wro-ldlg-grid">
             <div class="wro-ldlg-card wro-ldlg-done"><div class="wro-ldlg-num">${summary.added}</div><div class="wro-ldlg-lbl">✅ dodanych</div></div>
             <div class="wro-ldlg-card"><div class="wro-ldlg-num">${summary.updated}</div><div class="wro-ldlg-lbl">🔁 zaktualizowanych</div></div>
-            <div class="wro-ldlg-card wro-ldlg-todo"><div class="wro-ldlg-num">${summary.news}</div><div class="wro-ldlg-lbl">🔥 z nowością</div></div>
-            <div class="wro-ldlg-card wro-ldlg-partial"><div class="wro-ldlg-num">${summary.missing.length}</div><div class="wro-ldlg-lbl">📂 brakuje teczki</div></div>
+            <div class="wro-ldlg-card wro-ldlg-todo"><div class="wro-ldlg-num">${summary.news}</div><div class="wro-ldlg-lbl">🔥 do zajęcia (wszyscy)</div></div>
+            <div class="wro-ldlg-card wro-ldlg-partial"><div class="wro-ldlg-num">${summary.missing.length}</div><div class="wro-ldlg-lbl">📂 brak w Szafce</div></div>
           </div>
           ${missHtml}
-          ${summary.firstSeen > 0 ? `<div class="wro-ldlg-note wro-ldlg-first">🆕 ${summary.firstSeen} osób bez wcześniejszego wpisu (nowe względem poprzedniego raportu / Szafki). To nie to samo co 🔥 nowość — tam są niezałatwione adnotacje.</div>` : ''}
+          ${summary.firstSeen > 0 ? `<div class="wro-ldlg-note wro-ldlg-first">🆕 ${summary.firstSeen} osób bez wcześniejszego wpisu (nowe względem poprzedniego raportu / Szafki) — niezależnie od tego, czy mają coś do zajęcia.</div>` : ''}
           ${summary.goneCount > 0 ? `<div class="wro-ldlg-note wro-ldlg-first">⚠️ ${summary.goneCount} zniknięć do przeglądu — dane, które osoba miała wcześniej, a już ich nie ma w tym raporcie.</div>` : ''}
           <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
-            ${summary.news > 0 ? `<button class="wro-ldlg-close" style="flex:1;background:#b91c1c" onclick="document.getElementById('wro-sync-dlg').style.display='none';WroModule.filterPendingOnly()">Pokaż do zajęcia (${summary.news})</button>` : ''}
+            ${summary.news > 0 ? `<button class="wro-ldlg-close" style="flex:1;background:#b91c1c" onclick="document.getElementById('wro-sync-dlg').style.display='none';WroModule.filterPendingOnly()">Pokaż wszystkich do zajęcia (${summary.news})</button>` : ''}
             ${summary.firstSeen > 0 ? `<button class="wro-ldlg-close" style="flex:1;background:#0f766e" onclick="document.getElementById('wro-sync-dlg').style.display='none';WroModule.filterFirstSeenOnly()">Pokaż bez wcześniejszego wpisu (${summary.firstSeen})</button>` : ''}
             ${summary.goneCount > 0 ? `<button class="wro-ldlg-close" style="flex:1;background:#b45309" onclick="document.getElementById('wro-sync-dlg').style.display='none';WroModule.reviewGoneQueue()">Przejrzyj zniknięcia (${summary.goneCount})</button>` : ''}
-            ${summary.missing.length > 0 ? `<button class="wro-ldlg-close" style="flex:1;background:#475569" onclick="document.getElementById('wro-sync-dlg').style.display='none';WroModule.filterMissingFolders()">Filtruj listę: bez teczki</button>` : ''}
+            ${summary.missing.length > 0 ? `<button class="wro-ldlg-close" style="flex:1;background:#475569" onclick="document.getElementById('wro-sync-dlg').style.display='none';WroModule.filterMissingFolders()">Filtruj listę: brak w Szafce</button>` : ''}
             <button class="wro-ldlg-close" style="flex:1" onclick="document.getElementById('wro-sync-dlg').style.display='none'">Zamknij</button>
           </div>
         </div>
@@ -621,6 +764,11 @@ const WroModule = (() => {
 
   /* ─── ADNOTACJE NA WYNIKACH ─────────────────────────────── */
   const ANNOT_LS_KEY = 'egze3_wro_annotations';
+  // Wersja adnotacji rośnie przy każdym zapisie — używana do inwalidacji
+  // cache'a „do zajęcia” (entityHasPendingLive), żeby nie liczyć tego samego
+  // w kółko przy każdym przewinięciu listy, a jednocześnie od razu widzieć
+  // zmianę po oznaczeniu wpisu jako Zrobione/Wyklucz.
+  let _annotVersion = 0;
 
   let _annotMem = null;
   function loadAnnotations() {
@@ -631,6 +779,7 @@ const WroModule = (() => {
   }
   function saveAnnotations(obj) {
     _annotMem = obj;
+    _annotVersion++;
     localStorage.setItem(ANNOT_LS_KEY, JSON.stringify(obj));
   }
   function buildAnnotKey(pk, sec, iid) {
@@ -869,6 +1018,7 @@ const WroModule = (() => {
   }
 
   function rebuildEntitiesFromBaza() {
+    invalidatePendingCache();
     entities = Object.keys(bazaDanych).map(id => {
       const avail = Object.keys(bazaDanych[id]).filter(k => k !== '_meta' && bazaDanych[id][k].length > 1);
       return { id, availableSources: avail, sourceCount: avail.length };
@@ -940,12 +1090,25 @@ const WroModule = (() => {
       actionSrcs.forEach(src => {
         const rows = data[src];
         const safe = src.replace(/[^a-zA-Z0-9]/g, '');
-        for (let r = 1; r < rows.length; r++) {
-          const fp = rows[r].slice(0, 5).map(v => String(v || '')).join('||');
-          const ann = annots[buildAnnotKey(pk, safe, fp)];
+        const kind = detectSplitKind(src);
+        const headers = rows[0];
+        // Banki OGNIVO / instytucje AUM są oznaczane per-wpis (klucz
+        // "bank:<kod>" / "aum:<kod>"), nie per cały wiersz — jeśli
+        // policzylibyśmy je jak zwykłą sekcję (fingerprint całego wiersza),
+        // już oznaczone wpisy zawsze wychodziłyby jako "do zajęcia" (fp się
+        // nie zgadza z tym, co realnie zapisano).
+        const bodyRows = kind ? explodeSplitRows(headers, rows.slice(1), kind) : rows.slice(1);
+        bodyRows.forEach(row => {
+          let ann;
+          if (kind) {
+            ann = findSplitAnnotation(pk, splitCanonFromRow(headers, row, kind), kind);
+          } else {
+            const fp = row.slice(0, 5).map(v => String(v || '')).join('||');
+            ann = annots[buildAnnotKey(pk, safe, fp)];
+          }
           if (ann && (ann.status === 'done' || ann.status === 'excluded')) known++;
           else todo++;
-        }
+        });
       });
 
       if (known === 0) result.noAnnotations++;
@@ -964,11 +1127,20 @@ const WroModule = (() => {
     }
     const { total, withActions, allKnown, partiallyKnown, noAnnotations, noActionSections } = summary;
     const hasAnyAnnot = allKnown + partiallyKnown > 0;
+    const newPending = summary.newPending || 0;
+    const leadHtml = newPending > 0 ? `
+          <div class="wro-ldlg-lead" onclick="document.getElementById('wro-load-dlg').style.display='none';WroModule.filterNewPendingOnly()">
+            <div class="wro-ldlg-lead-num">🎯 ${newPending}</div>
+            <div class="wro-ldlg-lead-txt">
+              <strong>Nowe do zajęcia</strong> — tylu podmiotów nie było wcześniej I mają coś nieoznaczonego.<br>To najważniejsza liczba po wgraniu raportu — kliknij, aby je zobaczyć.
+            </div>
+          </div>` : '';
 
     dlg.innerHTML = `
       <div class="wro-ldlg-overlay" onclick="document.getElementById('wro-load-dlg').style.display='none'">
         <div class="wro-ldlg-box" onclick="event.stopPropagation()">
-          <div class="wro-ldlg-title">📊 Podsumowanie wczytanego pliku</div>
+          <div class="wro-ldlg-title">📊 Podsumowanie wczytanego pliku <span class="wro-ldlg-help" onclick="event.stopPropagation();WroModule.showLegend()" title="Co oznaczają te liczby i odznaki?">❓</span></div>
+          ${leadHtml}
           <div class="wro-ldlg-grid">
             <div class="wro-ldlg-card">
               <div class="wro-ldlg-num">${total}</div>
@@ -988,7 +1160,7 @@ const WroModule = (() => {
             </div>
           </div>
           ${noActionSections > 0 ? `<div class="wro-ldlg-note">${noActionSections} podmiotów bez sekcji wynikowych (OGNIVO/AUM/JPK)</div>` : ''}
-          ${summary.firstSeen > 0 ? `<div class="wro-ldlg-note wro-ldlg-first">🆕 ${summary.firstSeen} osób nie miało wcześniej wpisu — nie było ich w poprzedniej bazie ani w Majątku Szafki. To nie filtr 🔥 Nowość WRO (niezałatwione adnotacje).</div>` : ''}
+          ${summary.firstSeen > 0 ? `<div class="wro-ldlg-note wro-ldlg-first">🆕 ${summary.firstSeen} osób nie miało wcześniej wpisu — nie było ich w poprzedniej bazie ani w Majątku Szafki (niezależnie, czy mają coś do zajęcia).</div>` : ''}
           ${!hasAnyAnnot ? `<div class="wro-ldlg-note wro-ldlg-first">ℹ️ Brak zapisanych adnotacji — to pierwsze wczytanie lub nowe urządzenie. Oznaczaj wpisy statusami aby przy kolejnym wczytaniu system pokazał delta.</div>` : ''}
           <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
             ${summary.firstSeen > 0 ? `<button class="wro-ldlg-close" style="flex:1;background:#0f766e" onclick="document.getElementById('wro-load-dlg').style.display='none';WroModule.filterFirstSeenOnly()">Pokaż tylko bez wcześniejszego wpisu (${summary.firstSeen})</button>` : ''}
@@ -1025,7 +1197,7 @@ const WroModule = (() => {
           'success'
         );
         if (typeof ZobowiazaniModule !== 'undefined' && ZobowiazaniModule.refreshAfterWroSync) ZobowiazaniModule.refreshAfterWroSync();
-        showLoadSummaryDialog({ ...computeLoadSummary(), firstSeen: first.length });
+        showLoadSummaryDialog({ ...computeLoadSummary(), firstSeen: first.length, newPending: countNewPending() });
       } catch(err) {
         showToast('❌ Błąd pliku bazy danych!', 'error');
       }
@@ -1061,10 +1233,30 @@ const WroModule = (() => {
     const fc = document.getElementById('wro-filters');
     if (!fc) return;
     fc.innerHTML = '';
+
+    const legendBtn = document.createElement('div');
+    legendBtn.className = 'wro-chip wro-chip-legend';
+    legendBtn.innerHTML = '❓ Co znaczą te odznaki?';
+    legendBtn.title = 'Objaśnienie wszystkich odznak i filtrów (Analityka WRO + Szafka teczek)';
+    legendBtn.onclick = () => showLegend();
+    fc.appendChild(legendBtn);
+
+    const newPendingChip = document.createElement('div');
+    newPendingChip.id = 'wro-chip-newpending';
+    newPendingChip.className = 'wro-chip wro-chip-hot' + (filterNewPending ? ' active' : '');
+    newPendingChip.innerHTML = '🎯 Nowe do zajęcia';
+    newPendingChip.title = 'Najważniejszy filtr po wgraniu nowej bazy: podmioty, których NIE było wcześniej (w poprzednim raporcie ani w Majątku Szafki) I mają coś nieoznaczonego (Zrobione/Wyklucz) w OGNIVO/AUM/JPK.';
+    newPendingChip.onclick = () => {
+      filterNewPending = !filterNewPending;
+      newPendingChip.classList.toggle('active', filterNewPending);
+      renderList(document.getElementById('wro-search')?.value || '');
+    };
+    fc.appendChild(newPendingChip);
+
     const noFolderChip = document.createElement('div');
     noFolderChip.className = 'wro-chip wro-chip-warn' + (filterNoFolder ? ' active' : '');
-    noFolderChip.innerHTML = '🗂 Bez teczki w Szafce';
-    noFolderChip.title = 'Podmioty bez dopasowanej teczki (PESEL/NIP) w Szafce';
+    noFolderChip.innerHTML = '🗂 Brak w Szafce';
+    noFolderChip.title = 'Podmioty bez dopasowanego rekordu (PESEL/NIP) w Szafce — to kwestia dopasowania kartoteki, nie ma związku z tym, czy jest coś do zajęcia.';
     noFolderChip.onclick = () => {
       filterNoFolder = !filterNoFolder;
       noFolderChip.classList.toggle('active', filterNoFolder);
@@ -1075,7 +1267,7 @@ const WroModule = (() => {
     firstChip.id = 'wro-chip-first';
     firstChip.className = 'wro-chip wro-chip-first' + (filterFirstSeen ? ' active' : '');
     firstChip.innerHTML = '🆕 Bez wcześniejszego wpisu';
-    firstChip.title = 'Osoby z wczytanego raportu, których nie było w poprzedniej bazie ani w Majątku Szafki. To nie to samo co 🔥 Nowość WRO (niezałatwione adnotacje).';
+    firstChip.title = 'Osoby z wczytanego raportu, których nie było w poprzedniej bazie ani w Majątku Szafki — samo pojawienie się, niezależnie czy mają coś do zajęcia. Do połączenia obu warunków użyj „🎯 Nowe do zajęcia”.';
     firstChip.onclick = () => {
       filterFirstSeen = !filterFirstSeen;
       firstChip.classList.toggle('active', filterFirstSeen);
@@ -1127,6 +1319,7 @@ const WroModule = (() => {
         if (view.person) return false;
       }
       if (filterFirstSeen && !isFirstSeenPerson(personKeyForEntity(item.id))) return false;
+      if (filterNewPending && !entityIsNewPending(item.id)) return false;
       if (!lf) return true;
       const view = item._view || resolveEntityView(item.id, arkIndex);
       item._view = view;
@@ -1148,10 +1341,19 @@ const WroModule = (() => {
     const isActive   = currentActiveId === item.id;
     const view = item._view || resolveEntityView(item.id);
     const stubMark = view.stub ? '<span class="wro-stub-chip" title="Tylko OGNIVO/AUM — brak raportu WRO">bez WRO</span>' : '';
-    const fromArk = view.person ? '<span class="wro-stub-chip ark" title="Dopasowano z Arkusza">teczka</span>' : '';
-    const firstMark = isFirstSeenPerson(personKeyForEntity(item.id))
-      ? '<span class="wro-stub-chip first" title="Nie było tej osoby w poprzednim raporcie ani w Majątku Szafki">nowy wpis</span>'
-      : '';
+    const fromArk = view.person ? '<span class="wro-stub-chip ark" title="Dopasowano z Arkusza">w Szafce</span>' : '';
+    const isFirst = isFirstSeenPerson(personKeyForEntity(item.id));
+    const isPending = entityHasPendingLive(item.id);
+    // Jedna, jednoznaczna odznaka zamiast dwóch osobnych — żeby od razu było
+    // widać, czy to "tylko się pojawiło", "tylko trzeba zająć" czy oba naraz
+    // (to jest dokładnie to, co ma pokazać filtr 🎯 Nowe do zajęcia).
+    const firstMark = (isFirst && isPending)
+      ? '<span class="wro-stub-chip hot" title="Nie było tej osoby wcześniej I ma nieoznaczone wyniki OGNIVO/AUM/JPK — to jest to, czego szukasz po wgraniu nowej bazy">🎯 nowe do zajęcia</span>'
+      : isFirst
+        ? '<span class="wro-stub-chip first" title="Nie było tej osoby w poprzednim raporcie ani w Majątku Szafki (ale to niekoniecznie znaczy, że ma coś do zajęcia)">nowy wpis</span>'
+        : isPending
+          ? '<span class="wro-stub-chip pending" title="Ma wyniki OGNIVO/AUM/JPK bez statusu Zrobione/Wyklucz">🔥 do zajęcia</span>'
+          : '';
     const folderIco = `<span class="wro-icon-jump wro-open-teczka" data-entity="${escWro(item.id)}" data-open-teczka="1" title="${view.person ? 'Otwórz teczkę w Szafce' : 'Szukaj teczki w Szafce'}">📂</span>`;
     const statusBadges = (inCart ? '🛒 ' : '') + (isAnalyzed ? '✅' : '');
     const maxDochod = item.availableSources.includes('Dochody') ? getMaxDochodForEntity(item.id) : 0;
@@ -1290,7 +1492,7 @@ const WroModule = (() => {
             <h2 class="wro-entity-title">
               ${escWro(view.displayName)}
               ${view.stub ? `<span class="wro-stub-chip" title="W bazie WRO są tylko wyniki OGNIVO/AUM">bez raportu WRO</span>` : ''}
-              ${view.person ? `<span class="wro-stub-chip ark">teczka z Arkusza</span>` : (view.stub ? `<span class="wro-stub-chip" title="PESEL/NIP nie znaleziony w Arkuszu">poza bazą</span>` : '')}
+              ${view.person ? `<span class="wro-stub-chip ark" title="Dopasowano z Arkusza">w Szafce</span>` : (view.stub ? `<span class="wro-stub-chip" title="PESEL/NIP nie znaleziony w Arkuszu">poza bazą</span>` : '')}
               ${metaBadges ? `<div class="wro-meta-row">${metaBadges}</div>` : ''}
               ${ognivoBadge}
               ${isZawieszonaWro(id, a3, b3) ? `<span class="wro-ognivo-badge" style="background:#7a5524" title="Sprawa zawieszona w Szafce / Arkuszu">⏸ Zawieszona</span>` : ''}
@@ -1369,22 +1571,22 @@ const WroModule = (() => {
       const isAction = src.startsWith('Wynik:');
       const disp = src.replace('Wynik: ','Akcja: ');
       const headers = rows[0];
-      const bodyRows = isOgnivoSource(src) ? explodeOgnivoRows(headers, rows.slice(1)) : rows.slice(1);
+      const splitKind = detectSplitKind(src);
+      const bodyRows = splitKind ? explodeSplitRows(headers, rows.slice(1), splitKind) : rows.slice(1);
 
       const todoCards = [];
       const knownCards = [];
 
       bodyRows.forEach((row, i) => {
-        const isOg = isOgnivoSource(src);
-        const canon = isOg ? ognivoCanonFromRow(headers, row) : '';
-        const rowFp = isOg ? ('bank:' + (canon || String(i))) : row.slice(0, 5).map(v => String(v || '')).join('||');
+        const canon = splitKind ? splitCanonFromRow(headers, row, splitKind) : '';
+        const rowFp = splitKind ? (SPLIT_IID_PREFIX[splitKind] + (canon || String(i))) : row.slice(0, 5).map(v => String(v || '')).join('||');
         const ann = isAction
-          ? (isOg ? findBankAnnotation(personKey, canon) : getAnnotation(personKey, safe, rowFp))
+          ? (splitKind ? findSplitAnnotation(personKey, canon, splitKind) : getAnnotation(personKey, safe, rowFp))
           : null;
         const cardCls = ann?.status === 'excluded' ? 'wro-card-excl' : ann?.status === 'done' ? 'wro-card-done' : '';
-        const title = isOg ? ognivoLabelFromRow(headers, row) : ('Wpis #' + (i + 1));
-        const annotIid = isOg ? ('bank:' + canon) : rowFp;
-        const annotSec = isOg ? 'WynikOGNIVO' : safe;
+        const title = splitKind ? splitLabelFromRow(headers, row, splitKind) : ('Wpis #' + (i + 1));
+        const annotIid = splitKind ? (SPLIT_IID_PREFIX[splitKind] + canon) : rowFp;
+        const annotSec = splitKind ? SPLIT_ANNOT_SECTION[splitKind] : safe;
         const cardHtml = `
           <div class="wro-card ${cardCls}">
             <div class="wro-card-hdr">
@@ -1597,8 +1799,9 @@ const WroModule = (() => {
       document.body.appendChild(pop);
     }
 
-    const current = (/ognivo/i.test(ctx.sec) || ctx.sec === 'OGNIVOStore')
-      ? (findBankAnnotation(ctx.pk, bankCodeCanon(String(ctx.iid).replace(/^bank:/i, ''))) || getAnnotation(ctx.pk, ctx.sec, ctx.iid))
+    const popKind = splitKindFromSec(ctx.sec);
+    const current = popKind
+      ? (findSplitAnnotation(ctx.pk, splitCodeCanon(String(ctx.iid).replace(/^(bank|aum):/i, ''), popKind), popKind) || getAnnotation(ctx.pk, ctx.sec, ctx.iid))
       : getAnnotation(ctx.pk, ctx.sec, ctx.iid);
     const isTodo = !current || !current.status || current.status === 'todo';
     const isDone = current?.status === 'done';
@@ -1664,9 +1867,10 @@ const WroModule = (() => {
       data = { status: 'excluded', reason };
     }
 
-    if ((/ognivo/i.test(ctx.sec) || ctx.sec === 'OGNIVOStore')) {
-      const canon = bankCodeCanon(String(ctx.iid).replace(/^bank:/i, ''));
-      if (canon) setOgnivoBankStatus(ctx.pk, canon, data);
+    const statusKind = splitKindFromSec(ctx.sec);
+    if (statusKind) {
+      const canon = splitCodeCanon(String(ctx.iid).replace(/^(bank|aum):/i, ''), statusKind);
+      if (canon) setSplitStatus(ctx.pk, canon, data, statusKind);
       else setAnnotationData(ctx.pk, ctx.sec, ctx.iid, data);
     } else {
       setAnnotationData(ctx.pk, ctx.sec, ctx.iid, data);
@@ -1675,6 +1879,10 @@ const WroModule = (() => {
     const pop = document.getElementById('wro-annot-pop');
     if (pop) pop.style.display = 'none';
 
+    // Odznaki na liście (🔥 do zajęcia / 🎯 nowe do zajęcia) muszą się od razu
+    // zaktualizować — bez tego licznik "do zajęcia" wygląda, jakby oznaczenie
+    // Zrobione/Wyklucz nic nie zmieniało, dopóki ktoś nie przeładuje strony.
+    renderList(document.getElementById('wro-search')?.value || '');
     if (currentActiveId) renderEntityContent(currentActiveId, null);
     showToast(
       status === 'done' ? '✅ Oznaczono jako zrobione' :
@@ -1804,7 +2012,16 @@ const WroModule = (() => {
   }
 
   function activate(params = {}) {
-    if (!activated) { activated = true; }
+    if (!activated) {
+      activated = true;
+      // Banki OGNIVO z wgranych plików XML mogą pojawić się w dowolnym
+      // momencie (ognivo.js zapisuje je do SharedStore) — bez tego licznik
+      // „do zajęcia” / „nowe do zajęcia” pokazywałby stare dane do czasu
+      // przypadkowego odświeżenia czegoś innego.
+      if (typeof SharedStore !== 'undefined' && typeof SharedStore.on === 'function' && SharedStore.KEYS && SharedStore.KEYS.OGNIVO) {
+        SharedStore.on(SharedStore.KEYS.OGNIVO, () => invalidatePendingCache());
+      }
+    }
     tryLoadPersistedBaza();
     const live = document.getElementById('wro-list');
     if (!live) render();
@@ -1986,7 +2203,13 @@ const WroModule = (() => {
     filterFirstSeenOnly, isFirstSeenPerson, getFirstSeenStamp,
     explodeOgnivoRows, findBankAnnotation, setOgnivoBankStatus,
     isOgnivoSource, ognivoCanonFromRow, ognivoLabelFromRow,
-    filterPendingOnly,
+    explodeAumRows, findAumAnnotation, setAumStatus,
+    isAumSource, aumCanonFromRow, aumLabelFromRow,
+    detectSplitKind, isSplitSource, explodeSplitRows,
+    splitCanonFromRow, splitLabelFromRow, findSplitAnnotation, setSplitStatus,
+    filterPendingOnly, filterNewPendingOnly,
+    entityHasPendingLive, entityIsNewPending, countNewPending,
+    invalidatePendingCache, showLegend,
   };
 })();
 

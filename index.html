@@ -570,6 +570,11 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
 .wro-chip.active{background:var(--accent);color:#fff;border-color:var(--accent);font-weight:650}
 .wro-chip-warn.active{background:#b45309;border-color:#b45309;color:#fff}
 .wro-chip-first.active{background:#0f766e;border-color:#0f766e;color:#fff}
+.wro-chip-hot{background:rgba(234,88,12,.16);color:#fdba74;border-color:rgba(234,88,12,.35);font-weight:650}
+.wro-chip-hot:hover{background:rgba(234,88,12,.28);color:#fed7aa}
+.wro-chip-hot.active{background:linear-gradient(135deg,#ea580c,#b91c1c);border-color:#ea580c;color:#fff}
+.wro-chip-legend{background:transparent;color:#4a6480;border-style:dashed}
+.wro-chip-legend:hover{color:#d0e4f5;border-color:#4a6480}
 .wro-list{flex:1;overflow-y:auto;min-height:0}
 .wro-list::-webkit-scrollbar{width:6px}
 .wro-list::-webkit-scrollbar-thumb{background:#374151;border-radius:3px}
@@ -593,6 +598,8 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
 }
 .wro-stub-chip.ark{background:#3f6212; color:#ecfccb}
 .wro-stub-chip.first{background:#0f766e; color:#ccfbf1}
+.wro-stub-chip.pending{background:#7f1d1d; color:#fecaca}
+.wro-stub-chip.hot{background:linear-gradient(135deg,#ea580c,#b91c1c); color:#fff}
 .wro-entity-title .wro-stub-chip{margin:4px 6px 0 0}
 .wro-list-score{font-size:.75rem;color:#4a6480;margin-top:5px;display:flex;align-items:center;gap:3px;flex-wrap:wrap}
 .wro-icon-jump{cursor:pointer;padding:2px 5px;border-radius:4px;transition:.15s;background:rgba(255,255,255,.04)}
@@ -830,7 +837,22 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
   background:var(--panel);border-radius:14px;padding:28px;
   box-shadow:0 20px 60px rgba(0,0,0,.25);max-width:480px;width:90%;
 }
-.wro-ldlg-title{font-size:1.1rem;font-weight:700;color:var(--text);margin-bottom:20px}
+.wro-ldlg-title{font-size:1.1rem;font-weight:700;color:var(--text);margin-bottom:20px;display:flex;align-items:center;gap:8px}
+.wro-ldlg-help{
+  margin-left:auto;font-size:.85rem;font-weight:600;cursor:pointer;color:var(--muted);
+  border:1px solid var(--line);border-radius:999px;width:22px;height:22px;
+  display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;
+}
+.wro-ldlg-help:hover{color:var(--text);border-color:var(--accent)}
+.wro-ldlg-lead{
+  display:flex;align-items:center;gap:14px;cursor:pointer;
+  background:linear-gradient(135deg,rgba(234,88,12,.14),rgba(185,28,28,.14));
+  border:1px solid rgba(234,88,12,.4);border-radius:12px;padding:14px 16px;margin-bottom:16px;
+  transition:.15s;
+}
+.wro-ldlg-lead:hover{border-color:#ea580c;background:linear-gradient(135deg,rgba(234,88,12,.22),rgba(185,28,28,.22))}
+.wro-ldlg-lead-num{font-size:2rem;font-weight:800;color:#ea580c;line-height:1;flex-shrink:0}
+.wro-ldlg-lead-txt{font-size:.82rem;color:var(--text);line-height:1.4}
 .wro-ldlg-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-bottom:16px}
 .wro-ldlg-card{
   background:var(--panel2);border-radius:10px;padding:14px;
@@ -860,6 +882,38 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
   border:none;border-radius:8px;font-size:.9rem;font-weight:600;cursor:pointer;
 }
 .wro-ldlg-close:hover{background:var(--accentHover,#2563eb)}
+
+/* ═══════════════════════════════════════════════
+   WSPÓLNA LEGENDA (Analityka WRO + Szafka teczek)
+   Neutralny, ciemny overlay — działa niezależnie od motywu aktywnej zakładki.
+   ═══════════════════════════════════════════════ */
+.egz-legend-overlay{
+  position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;
+  display:flex;align-items:center;justify-content:center;padding:20px;
+}
+.egz-legend-box{
+  background:#111827;color:#e2e8f0;border-radius:14px;padding:26px;
+  box-shadow:0 20px 60px rgba(0,0,0,.4);max-width:640px;width:100%;
+  max-height:85vh;overflow-y:auto;
+}
+.egz-legend-title{font-size:1.15rem;font-weight:700;margin-bottom:8px}
+.egz-legend-sub{font-size:.82rem;color:#94a3b8;margin-bottom:18px;line-height:1.5}
+.egz-legend-group{margin-bottom:18px}
+.egz-legend-group-title{font-size:.85rem;font-weight:700;color:#93c5fd;margin-bottom:8px}
+.egz-legend-item{display:flex;align-items:flex-start;gap:10px;padding:6px 0;border-top:1px solid rgba(255,255,255,.06)}
+.egz-legend-item:first-of-type{border-top:none}
+.egz-legend-badge{
+  flex-shrink:0;min-width:104px;text-align:center;font-size:.68rem;font-weight:700;
+  padding:4px 8px;border-radius:999px;background:rgba(255,255,255,.09);color:#cbd5e1;white-space:nowrap;
+}
+.egz-legend-txt{font-size:.8rem;line-height:1.45;display:flex;flex-direction:column;gap:2px}
+.egz-legend-txt strong{color:#f1f5f9}
+.egz-legend-txt span{color:#94a3b8}
+.egz-legend-close{
+  width:100%;padding:10px;margin-top:6px;background:#2563eb;color:#fff;
+  border:none;border-radius:8px;font-size:.9rem;font-weight:600;cursor:pointer;
+}
+.egz-legend-close:hover{background:#1d4ed8}
 
 /* ═══════════════════════════════════════════════
    ZOBOWIĄZANI — Szafka teczek (kartoteka)
@@ -962,9 +1016,13 @@ body{font-family:var(--font);background:var(--bg);color:var(--text)}
 .zob-pill.pill-warn.active{background:#9a6b2f; border-color:#9a6b2f}
 .zob-pill.pill-ok.active{background:var(--zob-olive); border-color:var(--zob-olive)}
 .zob-pill.pill-danger.active{background:var(--zob-spine); border-color:var(--zob-spine)}
+.zob-pill.pill-hot{background:linear-gradient(135deg,rgba(234,88,12,.16),rgba(139,58,58,.16)); color:#9a3412; border-color:rgba(234,88,12,.4); font-weight:700}
+.zob-pill.pill-hot:hover{background:linear-gradient(135deg,rgba(234,88,12,.28),rgba(139,58,58,.28))}
+.zob-pill.pill-hot.active{background:linear-gradient(135deg,#ea580c,#8b3a3a); border-color:#ea580c; color:#fff}
 .zob-pill-count{opacity:.85; font-size:.7rem; padding:1px 6px; border-radius:10px; background:rgba(0,0,0,.12)}
 .zob-pill.active .zob-pill-count{background:rgba(255,255,255,.22)}
 .zob-pill-sep{color:var(--zob-edge); margin:0 2px}
+.zob-pill-glabel{font-size:.68rem; font-weight:700; letter-spacing:.03em; color:var(--zob-ink-soft); opacity:.7; margin:0 2px 0 4px}
 
 .zob-src-icos{
   display:flex; flex-wrap:wrap; align-items:center; gap:4px;
