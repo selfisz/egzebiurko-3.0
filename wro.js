@@ -141,22 +141,56 @@ const WroModule = (() => {
     // zawiera "nazwa", ale "Nazwa klienta" mogłaby — to jest strzał w osobę,
     // nie w bank/instytucję).
     const exclude = /imi[eę]|nazwisko|pesel|\bnip\b|klient|d[łl]u[żz]nik|zobowi[ąa]zan|wierzyciel|^adres|^data|kwota|warto[śs][ćc]/i;
+    // Niektóre eksporty mają ID i nazwę banku/instytucji w DWÓCH osobnych
+    // kolumnach (np. "Bank ID" + "Nazwa banku") — wtedy chcemy pokazać
+    // czytelną NAZWĘ, nie goły kod, więc kolumna "nazwa ..." ma priorytet
+    // nad samym "bank"/"instytucja" (który może trafić w kolumnę z czystym ID).
+    const nameSpecific = kind === 'aum'
+      ? /nazwa\s*(instytucj|towarzystw|tfi|fundusz)|nazwa\s*podmiotu/i
+      : /nazwa\s*bank/i;
+    let idx = hLower.findIndex(h => nameSpecific.test(h));
+    if (idx >= 0) return idx;
     // Najpierw szukamy ściśle specyficznych nagłówków — dzięki temu kolejność
     // kolumn w eksporcie (np. "Imię, Nazwisko, PESEL, Nazwa instytucji, ...")
     // nie ma znaczenia: trafi w "Nazwa instytucji", a nie w kolumnę osoby.
     const specific = kind === 'aum'
       ? /instytucj|towarzystw|\btfi\b|fundusz|ubezpiecz/i
       : /\bbank(u|ów|owy)?\b|kod\s*bank/i;
-    let idx = hLower.findIndex(h => specific.test(h));
+    idx = hLower.findIndex(h => specific.test(h));
     if (idx >= 0) return idx;
     // Dopiero jako fallback — szerszy wzorzec, ale z wykluczeniem kolumn osoby.
-    const loose = kind === 'aum' ? /nazwa|podmiot/i : /instytucj/i;
+    // "nazwa"/"odpowied(ź)"/"wynik" dopisane też dla OGNIVO — realne eksporty
+    // z makra bywają nazwane inaczej niż nasze założenia ("Nazwa", "Odpowiedź"),
+    // a bez tego dopasowania kod spadał od razu do ostatniej deski ratunku.
+    const loose = kind === 'aum' ? /nazwa|podmiot/i : /instytucj|nazwa|podmiot|odpowied|wynik/i;
     idx = hLower.findIndex(h => loose.test(h) && !exclude.test(h));
     if (idx >= 0) return idx;
     idx = hLower.findIndex(h => loose.test(h));
-    return idx >= 0 ? idx : 0;
+    if (idx >= 0) return idx;
+    // Absolutna ostatnia deska ratunku: NIE zgaduj kolumny 0 na oślep — to w
+    // praktyce najczęściej kolumna identyfikacyjna (PESEL/Imię/Nazwisko), co
+    // powodowało, że w Majątku bank/instytucja renderowały się jako imię i
+    // nazwisko osoby. Szukamy więc od KOŃCA pierwszej kolumny, która na pewno
+    // NIE jest kolumną osoby — w eksportach WRO dane „wynikowe” zwykle są
+    // dolepiane na końcu wiersza, za kolumnami identyfikacyjnymi.
+    for (let i = hLower.length - 1; i >= 0; i--) {
+      if (!exclude.test(hLower[i])) return i;
+    }
+    return hLower.length ? hLower.length - 1 : 0;
   }
   function ognivoBankColIndex(headers) { return splitEntryColIndex(headers, 'ognivo'); }
+
+  /** Osobna kolumna z samym kodem/ID (np. "Bank ID", "Kod instytucji"),
+   *  gdy nazwa banku/instytucji jest w INNEJ kolumnie (patrz nameSpecific
+   *  powyżej) — żeby dało się złożyć czytelną etykietę "KOD Nazwa", tak jak
+   *  w eksportach, które trzymają kod i nazwę w jednej komórce. */
+  function splitCodeColIndex(headers, kind) {
+    const hLower = (headers || []).map(h => String(h || '').toLowerCase());
+    const pattern = kind === 'aum'
+      ? /kod\s*(instytucj|tfi|fundusz|podmiotu)/i
+      : /kod\s*bank|bank\s*id/i;
+    return hLower.findIndex(h => pattern.test(h));
+  }
 
   function explodeSplitRows(headers, bodyRows, kind) {
     const colIdx = splitEntryColIndex(headers, kind);
@@ -196,7 +230,17 @@ const WroModule = (() => {
   function splitLabelFromRow(headers, row, kind) {
     const idx = splitEntryColIndex(headers, kind);
     const raw = String((row && row[idx]) != null ? row[idx] : (row || []).filter(Boolean).join(' ')).trim();
-    return raw || SPLIT_DEFAULT_LABEL[kind] || 'Wpis';
+    const base = raw || SPLIT_DEFAULT_LABEL[kind] || 'Wpis';
+    // Gdy kod i nazwa banku/instytucji siedzą w DWÓCH osobnych kolumnach
+    // (np. "Bank ID" + "Nazwa banku"), doklejamy kod przed nazwą — dokładnie
+    // ten sam widok ("1240 Pekao"), jaki dostajemy dla eksportów, które mają
+    // to w jednej komórce (patrz splitCodeCanon / chip z kodem w Szafce).
+    const codeIdx = splitCodeColIndex(headers, kind);
+    if (codeIdx >= 0 && codeIdx !== idx) {
+      const codeVal = String((row && row[codeIdx]) != null ? row[codeIdx] : '').trim();
+      if (codeVal && !base.startsWith(codeVal)) return `${codeVal} ${base}`;
+    }
+    return base;
   }
   function ognivoLabelFromRow(headers, row) { return splitLabelFromRow(headers, row, 'ognivo'); }
   function aumLabelFromRow(headers, row) { return splitLabelFromRow(headers, row, 'aum'); }
