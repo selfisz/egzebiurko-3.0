@@ -521,8 +521,15 @@ const ZobowiazaniModule = (() => {
         if (dbSheet && prevIdx >= 0 && prevIdx < dbSheet.rows.length) {
           selectedRowIndex = prevIdx;
         }
-        renderViews();
-        updatePillsBar();
+        // Samo renderViews() odbudowuje CAŁY panel teczki (nagłówek + zakładki +
+        // treść, z animacją wejścia) — a to echo z Arkusza przychodzi bardzo
+        // często (po każdym autosave, nawet bez realnej zmiany treści, bo
+        // `savedAt` zawsze się zmienia). Efekt: otwarta sekcja Majątek migała/
+        // zwijała się sama w tle. Odświeżamy więc listę/pigułki normalnie, ale
+        // treść otwartej teczki tylko w zasięgu (bodyOnly) — tak jak przy
+        // oznaczaniu wpisu WRO (markWroItem) — bez niszczenia nagłówka.
+        renderViews({ detail: false });
+        renderDetailOnly({ bodyOnly: true });
       } catch (e) {
         console.warn('[ZobowiazaniModule] sync refresh failed:', e);
       } finally {
