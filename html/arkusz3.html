@@ -6050,6 +6050,23 @@ window.addEventListener('message', (e) => {
       window.onbeforeunload = null;
       location.reload();
     }
+  } else if (e.data && e.data.type === 'EGZE_CLEAR_ALL') {
+    // "Wyczyść dane aplikacji" z górnej apki: sam localStorage.clear() z
+    // ramki rodzica NIE gasi tego, co Arkusz trzyma w pamięci (App.sheets) —
+    // a autosave (albo ten handler SET_DB) zaraz by to odtworzył. Czyścimy
+    // więc WŁASNY stan i WŁASNE localStorage z wnętrza tej ramki.
+    try {
+      clearTimeout(App._autosaveT);
+      App._skipParentNotify = true;
+      window.onbeforeunload = null;
+      [AUTOSAVE_KEY, SCHEMA_KEY, COPY_MODE_KEY, WORK_MODE_KEY, VIEW_PREFS_KEY, SZAFKA_ARCHIVE_KEY]
+        .forEach(k => { try { localStorage.removeItem(k); } catch (_) {} });
+      App.sheets = [];
+      App.activeId = null;
+      App.schemas = [];
+      ensureBase();
+      render();
+    } catch (_) {}
   } else if (e.data && e.data.type === 'ENSURE_REGISTRY') {
     const before = App.sheets.length;
     ensureRegistrySheet(!!e.data.switchTo);

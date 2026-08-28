@@ -377,6 +377,25 @@ const ZobowiazaniModule = (() => {
 
   window.addEventListener('beforeunload', flushSaveNow);
 
+  // Używane przez "Wyczyść dane aplikacji" (patrz app.js: clearAllAppData).
+  // Samo localStorage.clear() NIE wystarczy: `flushSaveNow` jest podwiązany
+  // pod `beforeunload`, które odpali się przy `location.reload()` i — jeśli
+  // dbData/dbSheet wciąż siedzą w pamięci JS — natychmiast z powrotem
+  // zapisze (i wyśle do Arkusza przez SET_DB) właśnie wyczyszczone dane,
+  // "wskrzeszając" je tuż przed przeładowaniem strony. Zerowanie stanu w
+  // pamięci PRZED czyszczeniem localStorage neutralizuje ten wyścig.
+  function resetInMemoryState() {
+    clearTimeout(_saveTimer);
+    clearTimeout(_syncTimer);
+    _syncInFlight = false;
+    _suppressSyncUntil = Date.now() + 60000;
+    dbData = null;
+    dbSheet = null;
+    dbSheetIndex = -1;
+    dataSourceLabel = '';
+    invalidateListCache();
+  }
+
   /* ─── SYNCHRONIZACJA Z ARKUSZEM / PLIKIEM ──────────────── */
   let _syncTimer = null;
   let _suppressSyncUntil = 0;
@@ -3391,6 +3410,7 @@ const ZobowiazaniModule = (() => {
     archiveByKey,
     markWroItem,
     bulkMarkWroDone,
+    resetInMemoryState,
     setDetailTab,
     invalidateListCache,
     refreshAfterWroSync() { invalidateListCache(); if (activated) renderViews({ keepScroll: true }); },
