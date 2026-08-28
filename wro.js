@@ -374,6 +374,63 @@ const WroModule = (() => {
     return loadMajatekStore().pendingGone.length;
   }
 
+  /* ─── MASOWE OZNACZANIE „ZROBIONE" ──────────────────────────
+     Użytkownik ma czasem setki pojedynczych wpisów (bank/AUM/JPK) do
+     zajęcia po wgraniu nowej bazy i nie ma czasu klikać w każdy z osobna.
+     `processPendingWroItems` przechodzi po wskazanych osobach (albo po
+     wszystkich, jeśli nie podano listy) i oznacza KAŻDY nieoznaczony wpis
+     WRO (bank OGNIVO / instytucja AUM / JPK) jako "Zrobione". Z `dryRun`
+     tylko liczy, bez zapisu — do pokazania w oknie potwierdzenia, ile to
+     faktycznie zmieni. ─── */
+  function processPendingWroItems(personKeys, dryRun) {
+    const store = loadMajatekStore();
+    const keys = (personKeys && personKeys.length) ? personKeys : Object.keys(store.people || {});
+    let items = 0;
+    let people = 0;
+    const seenPk = new Set();
+    keys.forEach(rawKey => {
+      const pk = digitsId(rawKey);
+      if (!pk || seenPk.has(pk)) return;
+      seenPk.add(pk);
+      const suspended = typeof ZobowiazaniModule !== 'undefined' && typeof ZobowiazaniModule.isSuspended === 'function' && ZobowiazaniModule.isSuspended(pk);
+      if (suspended) return;
+      const snap = getMajatekSnapshot(pk);
+      if (!snap || !snap.sections) return;
+      let markedHere = 0;
+      Object.keys(snap.sections).forEach(src => {
+        if (!src.startsWith('Wynik:')) return;
+        const kind = detectSplitKind(src);
+        const safe = src.replace(/[^a-zA-Z0-9]/g, '');
+        const sec = snap.sections[src] || {};
+        const headers = sec.headers || [];
+        const rows = kind ? explodeSplitRows(headers, sec.rows || [], kind) : (sec.rows || []);
+        rows.forEach(row => {
+          if (kind) {
+            const canon = splitCanonFromRow(headers, row, kind);
+            if (!canon) return;
+            const ann = findSplitAnnotation(pk, canon, kind);
+            if (!ann || (ann.status !== 'done' && ann.status !== 'excluded')) {
+              markedHere++;
+              if (!dryRun) setSplitStatus(pk, canon, { status: 'done' }, kind);
+            }
+          } else {
+            const fp = (row || []).slice(0, 5).map(v => String(v || '')).join('||');
+            const ann = getAnnotation(pk, safe, fp);
+            if (!ann || !ann.status || ann.status === 'todo') {
+              markedHere++;
+              if (!dryRun) setAnnotationData(pk, safe, fp, { status: 'done' });
+            }
+          }
+        });
+      });
+      if (markedHere) { items += markedHere; people++; }
+    });
+    if (!dryRun) invalidatePendingCache();
+    return { items, people };
+  }
+  function countPendingWroItems(personKeys) { return processPendingWroItems(personKeys, true); }
+  function markAllPendingDone(personKeys) { return processPendingWroItems(personKeys, false); }
+
   /* ─── „DO ZAJĘCIA” NA ŻYWO (bez czekania na sync z Szafką) ──
      Licznik/filtr w samej Analityce WRO (lista po lewej) musi działać od razu
      po wgraniu pliku, zanim ktokolwiek kliknie „Synchronizuj z Szafką” — bo
@@ -2235,6 +2292,7 @@ const WroModule = (() => {
     filterPendingOnly, filterNewPendingOnly,
     entityHasPendingLive, entityIsNewPending, countNewPending,
     invalidatePendingCache, showLegend,
+    countPendingWroItems, markAllPendingDone,
   };
 })();
 

@@ -59,7 +59,12 @@ const OgnivoModule = (() => {
             <h2 class="mod-title">🏦 Wizualizator OGNIVO</h2>
             <p class="mod-sub">Analiza odpowiedzi XML z systemu OGNIVO — błyskawicznie identyfikuje rachunki bankowe</p>
           </div>
-          ${storedCount > 0 ? `<div class="ognivo-stored-badge">💾 ${storedCount} wyników w pamięci (SharedStore)</div>` : ''}
+          ${storedCount > 0 ? `
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+              <div class="ognivo-stored-badge">💾 ${storedCount} wyników w pamięci (SharedStore)</div>
+              <button class="btn-act btn-clear" onclick="OgnivoModule.clearStoredResults()" title="Usuwa wszystkie zapisane wyniki OGNIVO z pamięci (SharedStore) — np. jeśli liczba wygląda na błędną/przestarzałą po testach.">✕ Wyczyść pamięć OGNIVO</button>
+            </div>
+          ` : ''}
         </div>
 
         <div class="ognivo-dropzone" id="ognivo-drop">
@@ -213,6 +218,17 @@ const OgnivoModule = (() => {
     if (info)  info.textContent = `W kolejce: ${fileQueue.length} plików XML`;
     if (start) start.style.display = fileQueue.length > 0 ? 'inline-flex' : 'none';
     if (clear) clear.style.display = fileQueue.length > 0 ? 'inline-flex' : 'none';
+  }
+
+  function clearStoredResults() {
+    const stored = SharedStore.get(SharedStore.KEYS.OGNIVO, {});
+    const n = Object.keys(stored || {}).length;
+    if (!n) return;
+    const ok = confirm(`Usunąć wszystkie ${n} zapisanych wyników OGNIVO z pamięci (SharedStore)?\n\nTo NIE usuwa oznaczeń Zrobione/Wyklucz w Szafce/Analityce WRO — czyści tylko listę trafień z wgranych plików XML w tym module.`);
+    if (!ok) return;
+    SharedStore.set(SharedStore.KEYS.OGNIVO, {});
+    showToast(`🗑 Wyczyszczono ${n} zapisanych wyników OGNIVO`, 'info', 2500);
+    render();
   }
 
   function clearQueue() {
@@ -425,7 +441,7 @@ const OgnivoModule = (() => {
     }
   }
 
-  return { activate, startAnalysis, clearQueue, exportCSV, saveToStore, sortTable };
+  return { activate, startAnalysis, clearQueue, clearStoredResults, exportCSV, saveToStore, sortTable };
 })();
 
 window.OgnivoModule = OgnivoModule;

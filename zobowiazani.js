@@ -1829,6 +1829,11 @@ const ZobowiazaniModule = (() => {
                   🔥 Nowość WRO <span class="zob-pill-count">${counts.wroNew}</span>
                 </button>
               ` : ''}
+              ${counts.wroNew > 0 ? `
+                <button type="button" class="zob-action-btn" id="zob-wro-bulk-done-btn" style="height:28px;padding:0 10px;font-size:.72rem" onclick="ZobowiazaniModule.bulkMarkWroDone()" title="Oznacza JEDNYM klikiem wszystkie nieoznaczone wpisy WRO/OGNIVO/AUM/JPK jako Zrobione — u wszystkich osób pokazanych aktualnie na liście (uwzględnia aktywny filtr i wyszukiwanie).">
+                  ✅ Oznacz wszystko jako zrobione
+                </button>
+              ` : ''}
               ${counts.wroAccounts > 0 ? `
                 <button class="zob-pill pill-danger ${activeFilter === 'wro_accounts' ? 'active' : ''}" id="zob-wro-accounts-pill" onclick="ZobowiazaniModule.setFilter('wro_accounts')" title="Osoby z rachunkami/instytucjami OGNIVO lub AUM bez Zrobione lub Wyklucz (bez JPK, który nie jest rozbijany na pojedyncze pozycje).">
                   🏦 Nowe rachunki OGNIVO/AUM <span class="zob-pill-count">${counts.wroAccounts}</span>
@@ -2096,6 +2101,23 @@ const ZobowiazaniModule = (() => {
     } else if (wroNewBtn) {
       wroNewBtn.remove();
       if (activeFilter === 'wro_new') activeFilter = 'all';
+    }
+    let wroBulkBtn = document.getElementById('zob-wro-bulk-done-btn');
+    if (counts.wroNew > 0) {
+      if (!wroBulkBtn) {
+        wroBulkBtn = document.createElement('button');
+        wroBulkBtn.type = 'button';
+        wroBulkBtn.id = 'zob-wro-bulk-done-btn';
+        wroBulkBtn.className = 'zob-action-btn';
+        wroBulkBtn.style.cssText = 'height:28px;padding:0 10px;font-size:.72rem';
+        wroBulkBtn.title = 'Oznacza JEDNYM klikiem wszystkie nieoznaczone wpisy WRO/OGNIVO/AUM/JPK jako Zrobione — u wszystkich osób pokazanych aktualnie na liście (uwzględnia aktywny filtr i wyszukiwanie).';
+        wroBulkBtn.textContent = '✅ Oznacz wszystko jako zrobione';
+        wroBulkBtn.setAttribute('onclick', 'ZobowiazaniModule.bulkMarkWroDone()');
+        const sep = bar.querySelector('.zob-pill-sep');
+        bar.insertBefore(wroBulkBtn, sep || null);
+      }
+    } else if (wroBulkBtn) {
+      wroBulkBtn.remove();
     }
     let wroAccountsBtn = document.getElementById('zob-wro-accounts-pill');
     if (counts.wroAccounts > 0) {
@@ -3005,6 +3027,34 @@ const ZobowiazaniModule = (() => {
     updatePillsBar();
   }
 
+  // Masowe oznaczanie "Zrobione" dla WRO/OGNIVO/AUM/JPK — działa na osobach
+  // aktualnie widocznych na liście (respektuje aktywny filtr, sekcję i
+  // wyszukiwanie), żeby np. po filtrze "🔥 Nowość WRO" jeden klik odhaczył
+  // wszystko naraz, bez klikania po 300 pojedynczych kart.
+  function bulkMarkWroDone() {
+    if (typeof WroModule === 'undefined' || !WroModule.countPendingWroItems || !WroModule.markAllPendingDone) return;
+    const keys = getFilteredRows().map(item => item.key).filter(Boolean);
+    if (!keys.length) {
+      showToast('Brak osób na liście do oznaczenia', 'info', 2500);
+      return;
+    }
+    const preview = WroModule.countPendingWroItems(keys);
+    if (!preview.items) {
+      showToast('Nie ma nic do oznaczenia — wszystko już zrobione/wykluczone', 'info', 2500);
+      return;
+    }
+    const ok = confirm(
+      `Oznaczyć WSZYSTKIE nieoznaczone wpisy WRO/OGNIVO/AUM/JPK jako ZROBIONE?\n\n` +
+      `${preview.items} wpis(ów) u ${preview.people} osób (uwzględnia aktualny filtr/wyszukiwanie).\n\n` +
+      `Odwrócenie tego wymaga ręcznego odznaczania pojedynczo — upewnij się, że rzeczywiście chcesz to zrobić.`
+    );
+    if (!ok) return;
+    const result = WroModule.markAllPendingDone(keys);
+    invalidateListCache();
+    renderViews();
+    showToast(`✅ Oznaczono ${result.items} wpis(ów) u ${result.people} osób jako zrobione`, 'success', 3500);
+  }
+
   function applyArchiveIds(ids, meta, opts) {
     const list = Array.isArray(ids) ? ids : [];
     list.forEach(id => {
@@ -3340,6 +3390,7 @@ const ZobowiazaniModule = (() => {
     isSuspended,
     archiveByKey,
     markWroItem,
+    bulkMarkWroDone,
     setDetailTab,
     invalidateListCache,
     refreshAfterWroSync() { invalidateListCache(); if (activated) renderViews({ keepScroll: true }); },
