@@ -1257,10 +1257,17 @@ const ZobowiazaniModule = (() => {
           : '';
         const cls = item.ann?.status === 'excluded' ? 'is-excl' : item.ann?.status === 'done' ? 'is-done' : '';
         if (isOg) {
-          const code = item.canon ? escapeHtml(item.canon) : '';
+          // Kod jako osobny "chip" ma sens tylko, gdy wpis faktycznie zaczyna
+          // się od numerycznego kodu (banki OGNIVO). Wiele instytucji AUM
+          // (TFI, fundusze) nie ma żadnego kodu w nazwie — `item.canon` wtedy
+          // jest znormalizowaną nazwą (fallback w splitCodeCanon), a nie
+          // kodem, więc pokazywanie go jako "code" byłoby tylko zduplikowaną,
+          // nieczytelną nazwą.
+          const leadCode = String(item.bankLabel || '').match(/^\d{3,8}/);
+          const code = leadCode ? leadCode[0] : '';
           const name = escapeHtml(String(item.bankLabel || '').replace(/^\d{3,8}\s*[—–-]?\s*/, '') || title);
           return `<div class="zob-maj-bank ${cls}">
-            <div class="zob-maj-bank-code">${code || escapeHtml(title)}</div>
+            ${code ? `<div class="zob-maj-bank-code">${escapeHtml(code)}</div>` : ''}
             <div class="zob-maj-bank-name">${name}</div>
             ${annot}
           </div>`;
@@ -1528,8 +1535,8 @@ const ZobowiazaniModule = (() => {
       rowsWithIndex = rowsWithIndex.filter(item => wroFlagsForKey(item.key).newPending);
     } else if (activeFilter === 'wro_new') {
       rowsWithIndex = rowsWithIndex.filter(item => wroFlagsForKey(item.key).pending);
-    } else if (activeFilter === 'wro_ognivo') {
-      rowsWithIndex = rowsWithIndex.filter(item => wroFlagsForKey(item.key).pendingOgnivo);
+    } else if (activeFilter === 'wro_accounts') {
+      rowsWithIndex = rowsWithIndex.filter(item => wroFlagsForKey(item.key).pendingSplit);
     } else if (activeFilter === 'wro_first') {
       rowsWithIndex = rowsWithIndex.filter(item => wroFlagsForKey(item.key).firstSeen);
     } else if (activeFilter.startsWith('no_')) {
@@ -1620,14 +1627,14 @@ const ZobowiazaniModule = (() => {
   }
 
   function computeFilterCounts() {
-    if (!dbSheet || !dbSheet.rows) return { all: 0, todo: 0, progress: 0, complete: 0, cepik: 0, deferred: 0, due: 0, wroNew: 0, wroFirst: 0, wroOgnivo: 0, wroNewPending: 0 };
+    if (!dbSheet || !dbSheet.rows) return { all: 0, todo: 0, progress: 0, complete: 0, cepik: 0, deferred: 0, due: 0, wroNew: 0, wroFirst: 0, wroAccounts: 0, wroNewPending: 0 };
     // Skanowanie całej listy jest tanie samo w sobie, ale jest wołane po każdej
     // drobnej akcji — cache'ujemy wynik i liczymy od nowa tylko gdy coś, co
     // wpływa na liczniki, faktycznie się zmieniło (patrz: _countsDirty).
     if (!_countsDirty && _countsCache && _countsCache.rowsRef === dbSheet.rows) {
       return _countsCache.counts;
     }
-    let todo = 0, progress = 0, complete = 0, cepikCount = 0, deferred = 0, due = 0, wroNew = 0, wroFirst = 0, wroOgnivo = 0, wroNewPending = 0;
+    let todo = 0, progress = 0, complete = 0, cepikCount = 0, deferred = 0, due = 0, wroNew = 0, wroFirst = 0, wroAccounts = 0, wroNewPending = 0;
     let scoped = 0;
     dbSheet.rows.forEach(r => {
       const key = personKeyFromRow(r);
@@ -1656,8 +1663,8 @@ const ZobowiazaniModule = (() => {
       if (!archived && !isSuspendedRow(r) && wroFlagsForKey(key).pending) {
         wroNew++;
       }
-      if (!archived && !isSuspendedRow(r) && wroFlagsForKey(key).pendingOgnivo) {
-        wroOgnivo++;
+      if (!archived && !isSuspendedRow(r) && wroFlagsForKey(key).pendingSplit) {
+        wroAccounts++;
       }
       if (wroFlagsForKey(key).firstSeen) {
         wroFirst++;
@@ -1666,21 +1673,21 @@ const ZobowiazaniModule = (() => {
         wroNewPending++;
       }
     });
-    const counts = { all: scoped, todo, progress, complete, cepik: cepikCount, deferred, due, wroNew, wroFirst, wroOgnivo, wroNewPending };
+    const counts = { all: scoped, todo, progress, complete, cepik: cepikCount, deferred, due, wroNew, wroFirst, wroAccounts, wroNewPending };
     _countsCache = { rowsRef: dbSheet.rows, counts };
     _countsDirty = false;
     return counts;
   }
 
   function wroFlagsForKey(key) {
-    const empty = { sources: [], dochodMax: 0, pending: false, pendingOgnivo: false, firstSeen: false, newPending: false };
+    const empty = { sources: [], dochodMax: 0, pending: false, pendingSplit: false, firstSeen: false, newPending: false };
     if (!key) return empty;
     if (_wroFlagCache.has(key)) return _wroFlagCache.get(key);
     const flags = (typeof WroModule !== 'undefined' && WroModule.getPersonWroFlags)
       ? (WroModule.getPersonWroFlags(key) || empty)
       : empty;
     if (typeof flags.firstSeen !== 'boolean') flags.firstSeen = false;
-    if (typeof flags.pendingOgnivo !== 'boolean') flags.pendingOgnivo = false;
+    if (typeof flags.pendingSplit !== 'boolean') flags.pendingSplit = false;
     if (typeof flags.newPending !== 'boolean') flags.newPending = flags.firstSeen && flags.pending;
     _wroFlagCache.set(key, flags);
     return flags;
@@ -1811,7 +1818,7 @@ const ZobowiazaniModule = (() => {
               <button class="zob-pill pill-warn ${activeFilter === 'due' ? 'active' : ''}" onclick="ZobowiazaniModule.setFilter('due')">
                 Do powrotu <span class="zob-pill-count">${counts.due}</span>
               </button>
-              ${(counts.wroNew > 0 || counts.wroOgnivo > 0 || counts.wroFirst > 0 || counts.wroNewPending > 0) ? '<span class="zob-pill-glabel" id="zob-wro-glabel" title="Filtry pochodzące z Analityki WRO">WRO:</span>' : ''}
+              ${(counts.wroNew > 0 || counts.wroAccounts > 0 || counts.wroFirst > 0 || counts.wroNewPending > 0) ? '<span class="zob-pill-glabel" id="zob-wro-glabel" title="Filtry pochodzące z Analityki WRO">WRO:</span>' : ''}
               ${counts.wroNewPending > 0 ? `
                 <button class="zob-pill pill-hot ${activeFilter === 'wro_new_pending' ? 'active' : ''}" id="zob-wro-newpending-pill" onclick="ZobowiazaniModule.setFilter('wro_new_pending')" title="Najważniejszy filtr po wgraniu nowej bazy: podmioty, których NIE było wcześniej I mają coś nieoznaczonego (bank/JPK/AUM bez Zrobione/Wyklucz).">
                   🎯 Nowe do zajęcia <span class="zob-pill-count">${counts.wroNewPending}</span>
@@ -1822,9 +1829,9 @@ const ZobowiazaniModule = (() => {
                   🔥 Nowość WRO <span class="zob-pill-count">${counts.wroNew}</span>
                 </button>
               ` : ''}
-              ${counts.wroOgnivo > 0 ? `
-                <button class="zob-pill pill-danger ${activeFilter === 'wro_ognivo' ? 'active' : ''}" id="zob-wro-ognivo-pill" onclick="ZobowiazaniModule.setFilter('wro_ognivo')" title="Osoby z bankami OGNIVO bez Zrobione lub Wyklucz (tylko OGNIVO, bez JPK/AUM).">
-                  🏦 Nowe banki OGNIVO <span class="zob-pill-count">${counts.wroOgnivo}</span>
+              ${counts.wroAccounts > 0 ? `
+                <button class="zob-pill pill-danger ${activeFilter === 'wro_accounts' ? 'active' : ''}" id="zob-wro-accounts-pill" onclick="ZobowiazaniModule.setFilter('wro_accounts')" title="Osoby z rachunkami/instytucjami OGNIVO lub AUM bez Zrobione lub Wyklucz (bez JPK, który nie jest rozbijany na pojedyncze pozycje).">
+                  🏦 Nowe rachunki OGNIVO/AUM <span class="zob-pill-count">${counts.wroAccounts}</span>
                 </button>
               ` : ''}
               ${counts.wroFirst > 0 ? `
@@ -2045,7 +2052,7 @@ const ZobowiazaniModule = (() => {
     // Grupa pigułek "WRO:" — etykieta pojawia się/znika razem z pierwszą/ostatnią
     // z czterech pigułek poniżej, żeby wizualnie oddzielić je od reszty (Braki/
     // W toku/Komplet/Brak KAWA...) i nie mylić dwóch różnych światów "nowość".
-    const anyWro = counts.wroNewPending > 0 || counts.wroNew > 0 || counts.wroOgnivo > 0 || counts.wroFirst > 0;
+    const anyWro = counts.wroNewPending > 0 || counts.wroNew > 0 || counts.wroAccounts > 0 || counts.wroFirst > 0;
     let wroLabel = document.getElementById('zob-wro-glabel');
     if (anyWro && !wroLabel) {
       wroLabel = document.createElement('span');
@@ -2090,21 +2097,21 @@ const ZobowiazaniModule = (() => {
       wroNewBtn.remove();
       if (activeFilter === 'wro_new') activeFilter = 'all';
     }
-    let wroOgnivoBtn = document.getElementById('zob-wro-ognivo-pill');
-    if (counts.wroOgnivo > 0) {
-      if (!wroOgnivoBtn) {
-        wroOgnivoBtn = document.createElement('button');
-        wroOgnivoBtn.id = 'zob-wro-ognivo-pill';
-        wroOgnivoBtn.className = 'zob-pill pill-danger';
-        wroOgnivoBtn.title = 'Osoby z bankami OGNIVO bez Zrobione lub Wyklucz (tylko OGNIVO, bez JPK/AUM).';
-        wroOgnivoBtn.setAttribute('onclick', "ZobowiazaniModule.setFilter('wro_ognivo')");
+    let wroAccountsBtn = document.getElementById('zob-wro-accounts-pill');
+    if (counts.wroAccounts > 0) {
+      if (!wroAccountsBtn) {
+        wroAccountsBtn = document.createElement('button');
+        wroAccountsBtn.id = 'zob-wro-accounts-pill';
+        wroAccountsBtn.className = 'zob-pill pill-danger';
+        wroAccountsBtn.title = 'Osoby z rachunkami/instytucjami OGNIVO lub AUM bez Zrobione lub Wyklucz (bez JPK, który nie jest rozbijany na pojedyncze pozycje).';
+        wroAccountsBtn.setAttribute('onclick', "ZobowiazaniModule.setFilter('wro_accounts')");
         const sep = bar.querySelector('.zob-pill-sep');
-        bar.insertBefore(wroOgnivoBtn, sep || null);
+        bar.insertBefore(wroAccountsBtn, sep || null);
       }
-      wroOgnivoBtn.innerHTML = `🏦 Nowe banki OGNIVO <span class="zob-pill-count">${counts.wroOgnivo}</span>`;
-    } else if (wroOgnivoBtn) {
-      wroOgnivoBtn.remove();
-      if (activeFilter === 'wro_ognivo') activeFilter = 'all';
+      wroAccountsBtn.innerHTML = `🏦 Nowe rachunki OGNIVO/AUM <span class="zob-pill-count">${counts.wroAccounts}</span>`;
+    } else if (wroAccountsBtn) {
+      wroAccountsBtn.remove();
+      if (activeFilter === 'wro_accounts') activeFilter = 'all';
     }
     let firstBtn = document.getElementById('zob-wro-first-pill');
     if (counts.wroFirst > 0) {

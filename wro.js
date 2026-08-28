@@ -113,10 +113,14 @@ const WroModule = (() => {
     // nie zniekształciła kodu.
     const lead = s.match(/^\d+/);
     const d = lead ? lead[0] : s.replace(/\D/g, '');
-    if (kind === 'ognivo') return d.length >= 4 ? d.slice(0, 4) : d;
-    // AUM: kody instytucji bywają dłuższe (np. 8 cyfr) — bierzemy cały
-    // wiodący ciąg cyfr, żeby nie mylić różnych podmiotów o wspólnym prefiksie.
-    return d;
+    if (kind === 'ognivo' && d) return d.length >= 4 ? d.slice(0, 4) : d;
+    if (kind !== 'ognivo' && d) return d; // AUM: kody bywają dłuższe (np. 8 cyfr)
+    // Wiele instytucji AUM (TFI, fundusze) nie ma żadnego kodu liczbowego
+    // w nazwie ("XYZ TFI S.A.") — bez tego fallbacku `canon` byłby pustym
+    // stringiem, co psuje dopasowanie adnotacji (Zrobione/Wyklucz nic nie robi)
+    // i licznik "do zajęcia" nigdy by nie spadał. Normalizujemy więc samą
+    // nazwę, żeby kanon nigdy nie był pusty (o ile sam tekst nie jest pusty).
+    return s.toLowerCase().replace(/[^a-z0-9ąćęłńóśźż]+/g, '').slice(0, 48);
   }
   function bankCodeCanon(text) { return splitCodeCanon(text, 'ognivo'); }
   function aumCodeCanon(text) { return splitCodeCanon(text, 'aum'); }
@@ -132,10 +136,24 @@ const WroModule = (() => {
 
   function splitEntryColIndex(headers, kind) {
     const hLower = (headers || []).map(h => String(h || '').toLowerCase());
-    const pattern = kind === 'aum'
-      ? /instytucj|towarzystw|fundusz|aum|nazwa|podmiot/i
-      : /bank|kod\s*bank|instytucj/i;
-    const idx = hLower.findIndex(h => pattern.test(h));
+    // Kolumny, które NIE mogą być kolumną instytucji/banku, nawet jeśli
+    // przypadkiem zawierają słowo z szerszego wzorca (np. "Nazwisko" nie
+    // zawiera "nazwa", ale "Nazwa klienta" mogłaby — to jest strzał w osobę,
+    // nie w bank/instytucję).
+    const exclude = /imi[eę]|nazwisko|pesel|\bnip\b|klient|d[łl]u[żz]nik|zobowi[ąa]zan|wierzyciel|^adres|^data|kwota|warto[śs][ćc]/i;
+    // Najpierw szukamy ściśle specyficznych nagłówków — dzięki temu kolejność
+    // kolumn w eksporcie (np. "Imię, Nazwisko, PESEL, Nazwa instytucji, ...")
+    // nie ma znaczenia: trafi w "Nazwa instytucji", a nie w kolumnę osoby.
+    const specific = kind === 'aum'
+      ? /instytucj|towarzystw|\btfi\b|fundusz|ubezpiecz/i
+      : /\bbank(u|ów|owy)?\b|kod\s*bank/i;
+    let idx = hLower.findIndex(h => specific.test(h));
+    if (idx >= 0) return idx;
+    // Dopiero jako fallback — szerszy wzorzec, ale z wykluczeniem kolumn osoby.
+    const loose = kind === 'aum' ? /nazwa|podmiot/i : /instytucj/i;
+    idx = hLower.findIndex(h => loose.test(h) && !exclude.test(h));
+    if (idx >= 0) return idx;
+    idx = hLower.findIndex(h => loose.test(h));
     return idx >= 0 ? idx : 0;
   }
   function ognivoBankColIndex(headers) { return splitEntryColIndex(headers, 'ognivo'); }
@@ -149,7 +167,10 @@ const WroModule = (() => {
       let col = colIdx;
       let blob = cells[col];
       if (!/[|;]/.test(String(blob || ''))) {
-        const alt = cells.findIndex(c => /[|;]/.test(String(c || '')) && /\d{3,8}/.test(String(c || '')));
+        // Fallback: znajdź kolumnę z faktycznie wieloma wpisami (rozdzielonymi
+        // | albo ;) — bez wymogu cyfr, bo instytucje AUM (TFI, fundusze)
+        // często nie mają żadnego kodu liczbowego w nazwie.
+        const alt = cells.findIndex(c => /[|;]/.test(String(c || '')));
         if (alt >= 0) { col = alt; blob = cells[alt]; }
       }
       const parts = splitBankParts(blob != null ? blob : cells.filter(Boolean).join(' | '));
@@ -286,13 +307,15 @@ const WroModule = (() => {
     mergeXmlOgnivoBanks(out, id, personKeyForEntity(id));
     return out;
   }
-  function sectionsHavePending(personKey, sections, entityId, onlyOgnivo) {
+  function sectionsHavePending(personKey, sections, entityId, onlySplit) {
     const annots = loadAnnotations();
     const pk = digitsId(personKey);
     for (const src of Object.keys(sections)) {
       if (!src.startsWith('Wynik:')) continue;
       const kind = detectSplitKind(src);
-      if (onlyOgnivo && kind !== 'ognivo') continue;
+      // onlySplit = interesują nas tylko "rachunki" rozbite na karty — banki
+      // OGNIVO i instytucje AUM — bez JPK (który nie jest rozbijany na karty).
+      if (onlySplit && !kind) continue;
       const safe = src.replace(/[^a-zA-Z0-9]/g, '');
       const sec = sections[src] || {};
       const headers = sec.headers || [];
@@ -337,7 +360,7 @@ const WroModule = (() => {
     const snap = getMajatekSnapshot(personKey);
     return !!(snap && snap.sections && snap.sections[sectionKey]);
   }
-  function hasPendingItemsForKey(personKey, onlyOgnivo) {
+  function hasPendingItemsForKey(personKey, onlySplit) {
     const pk = digitsId(personKey);
     if (!pk) return false;
     if (typeof ZobowiazaniModule !== 'undefined' && typeof ZobowiazaniModule.isSuspended === 'function' && ZobowiazaniModule.isSuspended(pk)) {
@@ -345,7 +368,7 @@ const WroModule = (() => {
     }
     const snap = getMajatekSnapshot(pk);
     if (!snap || !snap.sections) return false;
-    return sectionsHavePending(pk, snap.sections, snap.entityId, onlyOgnivo);
+    return sectionsHavePending(pk, snap.sections, snap.entityId, onlySplit);
   }
   function getPendingGoneCount() {
     return loadMajatekStore().pendingGone.length;
@@ -474,16 +497,18 @@ const WroModule = (() => {
   function getPersonWroFlags(personKey) {
     const pk = digitsId(personKey);
     const firstSeen = isFirstSeenPerson(pk);
-    if (!pk) return { sources: [], dochodMax: 0, pending: false, pendingOgnivo: false, firstSeen: false, newPending: false };
+    if (!pk) return { sources: [], dochodMax: 0, pending: false, pendingSplit: false, firstSeen: false, newPending: false };
     const snap = getMajatekSnapshot(pk);
-    if (!snap || !snap.sections) return { sources: [], dochodMax: 0, pending: false, pendingOgnivo: false, firstSeen, newPending: false };
+    if (!snap || !snap.sections) return { sources: [], dochodMax: 0, pending: false, pendingSplit: false, firstSeen, newPending: false };
     const suspended = typeof ZobowiazaniModule !== 'undefined' && typeof ZobowiazaniModule.isSuspended === 'function' && ZobowiazaniModule.isSuspended(pk);
     const pending = suspended ? false : sectionsHavePending(pk, snap.sections, snap.entityId);
     return {
       sources: Object.keys(snap.sections),
       dochodMax: snap.dochodMax || 0,
       pending,
-      pendingOgnivo: suspended ? false : sectionsHavePending(pk, snap.sections, snap.entityId, true),
+      // "rachunki": banki OGNIVO + instytucje AUM (obie rozbijane na karty) —
+      // bez JPK, który jest jednym zbiorczym wpisem, nie kolekcją rachunków.
+      pendingSplit: suspended ? false : sectionsHavePending(pk, snap.sections, snap.entityId, true),
       firstSeen,
       // Dokładnie to, o co pyta użytkownik po wgraniu nowej bazy: podmiot,
       // którego nie było wcześniej, I ma coś nieoznaczonego do sprawdzenia.

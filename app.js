@@ -430,7 +430,7 @@ function showEgzLegend() {
   const zob = egzLegendGroupHtml('🗄 Szafka teczek (pigułki filtrów)', [
     { badge: '🎯 Nowe do zajęcia', name: 'Nowe do zajęcia', desc: 'To samo połączenie co w Analityce WRO: pierwsze pojawienie się I coś nieoznaczonego. Zacznij przegląd od tego filtra po każdej nowej bazie.' },
     { badge: '🔥 Nowość WRO', name: 'Do zajęcia (wszystkie)', desc: 'Wszyscy z nieoznaczonymi wynikami OGNIVO/AUM/JPK — także ci, którzy byli już wcześniej w bazie.' },
-    { badge: '🏦 Nowe banki OGNIVO', name: 'Nowe banki OGNIVO', desc: 'Podzbiór powyższego — tylko banki OGNIVO, bez AUM/JPK.' },
+    { badge: '🏦 Nowe rachunki OGNIVO/AUM', name: 'Nowe rachunki OGNIVO/AUM', desc: 'Podzbiór powyższego — tylko rozbite na karty rachunki: banki OGNIVO i instytucje AUM, bez JPK.' },
     { badge: '🆕 Bez wcześniejszego wpisu', name: 'Bez wcześniejszego wpisu', desc: 'Pierwsze pojawienie się w raporcie WRO — samo w sobie nie znaczy, że jest coś do zajęcia.' },
     { badge: '🗂 Nowe w Arkuszu', name: 'Nowe w Arkuszu', desc: 'Wiersze, które przed chwilą przybyły z Excela/Arkusza — nie ma to związku z raportami WRO.' },
     { badge: 'Braki / W toku / Komplet', name: 'Stan systemów rejestrowych', desc: 'Ile z systemów (KAWA, SINF, UFG, JPK, INFZ…) ma już wypełnioną datę dla danej osoby.' },
