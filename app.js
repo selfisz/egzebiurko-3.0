@@ -748,8 +748,33 @@ function clearAllAppData() {
   if (!ok) return;
   const ok2 = confirm('Na 100% jesteś pewien/pewna? Wszystkie dane zostaną trwale usunięte z tego urządzenia.');
   if (!ok2) return;
-  try { localStorage.clear(); } catch (e) { console.warn('[clearAllAppData] failed:', e); }
-  try { showToast('🗑 Wyczyszczono wszystkie dane aplikacji — odświeżam…', 'info', 2500); } catch {}
-  setTimeout(() => location.reload(), 500);
+
+  // KLUCZOWE: samo localStorage.clear() na tej (górnej) stronie NIE wystarcza.
+  // 1) Arkusz żyje w iframe i trzyma swoje dane w PAMIĘCI (App.sheets), nie
+  //    tylko w localStorage — trzeba go poprosić, żeby wyczyścił się SAM,
+  //    z wnętrza własnego kontekstu (patrz handler EGZE_CLEAR_ALL w arkusz3.html).
+  // 2) Szafka teczek (zobowiazani.js) ma własny `beforeunload`, który przy
+  //    `location.reload()` odpaliłby się i — jeśli dbData/dbSheet wciąż
+  //    siedzą w pamięci JS — natychmiast zapisałby je z powrotem do (właśnie
+  //    wyczyszczonego) localStorage, "wskrzeszając" dane tuż przed reloadem.
+  //    Zerujemy więc ten stan w pamięci NAJPIERW.
+  try {
+    if (window.ZobowiazaniModule && typeof window.ZobowiazaniModule.resetInMemoryState === 'function') {
+      window.ZobowiazaniModule.resetInMemoryState();
+    }
+  } catch (e) { console.warn('[clearAllAppData] resetInMemoryState failed:', e); }
+
+  try {
+    const frame = document.getElementById('arkusz-frame');
+    if (frame && frame.contentWindow) {
+      frame.contentWindow.postMessage({ type: 'EGZE_CLEAR_ALL' }, '*');
+    }
+  } catch (e) { console.warn('[clearAllAppData] EGZE_CLEAR_ALL failed:', e); }
+
+  setTimeout(() => {
+    try { localStorage.clear(); } catch (e) { console.warn('[clearAllAppData] failed:', e); }
+    try { showToast('🗑 Wyczyszczono wszystkie dane aplikacji — odświeżam…', 'info', 2500); } catch {}
+    setTimeout(() => location.reload(), 400);
+  }, 150);
 }
 window.clearAllAppData = clearAllAppData;
