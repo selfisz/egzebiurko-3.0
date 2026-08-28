@@ -728,3 +728,28 @@ const EgzeBundle = (() => {
 })();
 
 window.EgzeBundle = EgzeBundle;
+
+
+/* ─── WYCZYŚĆ WSZYSTKIE DANE APLIKACJI ──────────────────────
+   "Fabryczny reset" — usuwa WSZYSTKO co aplikacja trzyma w localStorage
+   (Arkusz, Szafka teczek, Analityka WRO, OGNIVO/SharedStore, adnotacje…),
+   żeby dane trzeba było wczytać na nowo z plików (.egze.json / .ots.json /
+   bazy WRO .js / XML OGNIVO). Zalecane PRZED tym: "Zapisz wszystko", żeby
+   mieć kopię na wypadek, gdyby to było kliknięte przez pomyłkę. ──────── */
+function clearAllAppData() {
+  const ok = confirm(
+    'Wyczyścić WSZYSTKIE dane aplikacji?\n\n' +
+    'Zniknie: Arkusz, Szafka teczek (w tym archiwum, przypięcia, otwarte karty), ' +
+    'cała baza Analityki WRO i adnotacje (Zrobione/Wyklucz), wyniki OGNIVO/AUM i koszyk.\n\n' +
+    'Będziesz musiał(a) wczytać dane na nowo z plików (Arkusz / baza WRO .js / pliki OGNIVO XML), ' +
+    'najlepiej z zapisanego wcześniej pliku „Zapisz wszystko” (.egze.json).\n\n' +
+    'Tej operacji NIE da się odwrócić. Kontynuować?'
+  );
+  if (!ok) return;
+  const ok2 = confirm('Na 100% jesteś pewien/pewna? Wszystkie dane zostaną trwale usunięte z tego urządzenia.');
+  if (!ok2) return;
+  try { localStorage.clear(); } catch (e) { console.warn('[clearAllAppData] failed:', e); }
+  try { showToast('🗑 Wyczyszczono wszystkie dane aplikacji — odświeżam…', 'info', 2500); } catch {}
+  setTimeout(() => location.reload(), 500);
+}
+window.clearAllAppData = clearAllAppData;
