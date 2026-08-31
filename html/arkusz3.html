@@ -6033,22 +6033,46 @@ window.addEventListener('message', (e) => {
     try { runAutosave(); } catch(_){}
     App._skipParentNotify=prevSkip;
   } else if (e.data && e.data.type === 'SET_DB') {
-    try {
-      const payload = e.data.payload;
-      if (!payload) return;
-      localStorage.setItem(AUTOSAVE_KEY, payload);
-      const data = JSON.parse(payload);
+    const payload = e.data.payload;
+    if (!payload) { /* nic nie rób */ }
+    else {
+      let data = null;
+      try {
+        data = JSON.parse(payload);
+      } catch (_) {
+        // Payload naprawdę nie jest poprawnym JSON-em — nie ma czego wczytać do
+        // pamięci, jedyna sensowna opcja to spróbować zapisać i przeładować się
+        // na czysto (to NIE jest przypadek przepełnionej quoty — patrz niżej).
+        try { localStorage.setItem(AUTOSAVE_KEY, payload); } catch(__){}
+        window.onbeforeunload = null;
+        location.reload();
+        return;
+      }
       App._skipParentNotify = true;
       const ok = loadWorkbookData(data, { silent: true, skipAutosave: true });
       App._skipParentNotify = false;
       if (!ok) {
         window.onbeforeunload = null;
         location.reload();
+        return;
       }
-    } catch (_) {
-      try { localStorage.setItem(AUTOSAVE_KEY, e.data.payload); } catch(__){}
-      window.onbeforeunload = null;
-      location.reload();
+      // Zapis do localStorage ODDZIELNIE od wczytania do pamięci (App.sheets).
+      // Gdy baza jest duża i przekroczy limit przeglądarki (QuotaExceededError),
+      // dane w PAMIĘCI muszą i tak zostać zaktualizowane — inaczej ta karta
+      // pokazywałaby starą/pustą „Zobowiązani”, mimo że Szafka ma pełne, aktualne
+      // dane. Przeładowanie strony w takiej sytuacji byłoby jeszcze gorsze: od
+      // razu cofnęłoby właśnie wczytane dane z powrotem do starej wersji z
+      // localStorage (dokładnie zgłoszony błąd: „w Szafce są ludzie, w
+      // Arkuszu/Zobowiązani nic”).
+      try {
+        localStorage.setItem(AUTOSAVE_KEY, payload);
+        App._autosaveWarned = false;
+      } catch (err) {
+        if (!App._autosaveWarned) {
+          App._autosaveWarned = true;
+          toast('⚠️ Baza za duża na localStorage — dane są widoczne, ale NIE przetrwają odświeżenia strony. Użyj „Zapisz JSON” / „Zapisz wszystko” jako kopii zapasowej.');
+        }
+      }
     }
   } else if (e.data && e.data.type === 'EGZE_CLEAR_ALL') {
     // "Wyczyść dane aplikacji" z górnej apki: sam localStorage.clear() z
