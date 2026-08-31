@@ -330,13 +330,29 @@ const ZobowiazaniModule = (() => {
     return true;
   }
 
+  let _quotaWarned = false;
+  function warnQuotaOnce() {
+    if (_quotaWarned) return;
+    _quotaWarned = true;
+    // Lekkie opóźnienie: to ostrzeżenie jest ważniejsze niż zwykłe komunikaty typu
+    // "Wczytano bazę" które często lecą tuż obok (jeden toast nadpisuje drugi) —
+    // dzięki temu ostrzeżenie o quocie wyświetli się jako ostatnie i zostanie.
+    setTimeout(() => {
+      if (typeof showToast === 'function') {
+        showToast('⚠️ Baza za duża na localStorage (limit przeglądarki) — zmiany są widoczne, ale mogą NIE przetrwać odświeżenia strony. Użyj „Zapisz wszystko” (.egze.json) jako kopii zapasowej.', 'error', 9000);
+      }
+    }, 150);
+  }
+
   function persistLocal() {
     if (!dbData) return;
     try {
       dbData.savedAt = new Date().toISOString();
       localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(dbData));
+      _quotaWarned = false;
     } catch (e) {
       console.warn('[ZobowiazaniModule] localStorage save failed:', e);
+      warnQuotaOnce();
     }
   }
 
@@ -354,6 +370,7 @@ const ZobowiazaniModule = (() => {
   function flushSaveNow() {
     if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null; }
     if (!dbData || !dbSheet) return;
+    let json;
     try {
       dbData.savedAt = new Date().toISOString();
       _lastSyncedAt = dbData.savedAt;
@@ -363,15 +380,31 @@ const ZobowiazaniModule = (() => {
         persistZawieszoneStore();
         _suspendDirty = false;
       }
-      const json = JSON.stringify(dbData);
+      json = JSON.stringify(dbData);
+    } catch (e) {
+      console.error('[ZobowiazaniModule] Błąd serializacji bazy:', e);
+      if (typeof showToast === 'function') showToast('Błąd zapisu bazy!', 'error');
+      return;
+    }
+    // localStorage.setItem i postMessage do Arkusza są ROZDZIELONE celowo: gdy
+    // baza jest duża i przekroczy limit localStorage (QuotaExceededError), Arkusz
+    // MUSI mimo to dostać świeże dane przez postMessage — inaczej pokazywałby
+    // starą/pustą kartę „Zobowiązani”, mimo że tu w Szafce dane są kompletne
+    // (dokładnie ten scenariusz: „w Szafce są ludzie, w Arkuszu nic”).
+    try {
       localStorage.setItem(AUTOSAVE_KEY, json);
+      _quotaWarned = false;
+    } catch (e) {
+      console.warn('[ZobowiazaniModule] localStorage zapis nieudany (quota?):', e);
+      warnQuotaOnce();
+    }
+    try {
       const frame = document.getElementById('arkusz-frame');
       if (frame && frame.contentWindow) {
         frame.contentWindow.postMessage({ type: 'SET_DB', payload: json }, '*');
       }
     } catch (e) {
-      console.error('[ZobowiazaniModule] Błąd zapisu:', e);
-      if (typeof showToast === 'function') showToast('Błąd zapisu bazy!', 'error');
+      console.error('[ZobowiazaniModule] Błąd wysyłki do Arkusza:', e);
     }
   }
 
